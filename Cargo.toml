@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+snip-core = { path = "crates/snip-core" }
+anyhow = "1"
+cosmic-text = "0.19"
+global-hotkey = "0.8"
+gpui = "0.2.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tiny-skia = "0.12"
+xcap = "0.9"
+arboard = "3.6"
+futures = "0.3"
+raw-window-handle = "0.6"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
