@@ -18,7 +18,9 @@ pub fn take_foreground(window: &Window) {
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return;
     };
-    // Allowed because we are handling the user's hotkey press.
+    // Windows permits the foreground change because we are handling the
+    // user's hotkey press.
+    // SAFETY: `hwnd` is the live window GPUI just opened; the call only reads it.
     let _ = unsafe { SetForegroundWindow(HWND(handle.hwnd.get() as _)) };
 }
 
