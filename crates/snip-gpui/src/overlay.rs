@@ -66,9 +66,8 @@ pub fn start(cx: &mut App) {
             Err(err) => eprintln!("snip: failed to open overlay: {err:#}"),
         }
     }
-    // Opening a window from a background app doesn't activate it, so keys
-    // (Esc) would still go to the previously focused app. Any one overlay
-    // will do: each handles Esc for the whole snip.
+    // A window opened from a background app isn't activated, so it gets no
+    // keys. One overlay is enough: each one's Esc ends the whole snip.
     if let Some(first) = windows.first() {
         first.update(cx, |_, window, _| window.activate_window()).ok();
     }
