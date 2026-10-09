@@ -16,6 +16,7 @@ arboard.workspace = true
 futures.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true
+gpui_platform.workspace = true
 image.workspace = true
 xcap.workspace = true
 

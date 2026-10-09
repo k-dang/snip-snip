@@ -74,9 +74,11 @@ editor: `P` pencil, `T` text, `C` crop, `Ctrl/Cmd+C` copy, `Ctrl/Cmd+S` save,
 
 - `crates/snip-core`: the document model and the only renderer (tiny-skia
   strokes, cosmic-text with bundled Inter). Framework-agnostic and unit tested.
-- `crates/snip-gpui`: GPUI 0.2.2 app with the hotkey (`global-hotkey`),
+- `crates/snip-gpui`: GPUI app with the hotkey (`global-hotkey`),
   capture (`xcap`), frozen-frame overlay, and editor. The editor preview is the
-  core renderer's output, so preview and export cannot drift.
+  core renderer's output, so preview and export cannot drift. GPUI is a git
+  dependency pinned to a Zed commit, since crates.io stops at the year-old
+  0.2.2 and the split `gpui_platform` crates are unpublished.
 
 Verified end-to-end on Windows 11 with two 1920×1080 monitors at 100% scale:
 
@@ -86,24 +88,25 @@ Verified end-to-end on Windows 11 with two 1920×1080 monitors at 100% scale:
 | Exported pixels vs. screen | 0 differing pixels on both monitors |
 | Edit commit (re-render + texture prep), 1080p | ≈ 4 ms |
 | Composite, 5K with 40 annotations | ≈ 22 ms (`render_timing` example) |
-| Idle CPU / memory | ≈ 0% / ≈ 52 MB working set |
+| Idle CPU / memory | ≈ 0% / ≈ 45 MB working set |
 | Memory over repeated snips | Flat after the fixes below |
 
 Clipboard holds PNG, `CF_DIBV5`, and `CF_DIB`. Save writes a PNG.
 
-GPUI problems found and worked around (all Windows; about 60 lines of shims):
+GPUI problems found on Windows. Items 1 and 3 were found on 0.2.2 and are
+fixed in the pinned commit:
 
-1. `WindowKind::PopUp` is not topmost. Fixed with `SetWindowPos(HWND_TOPMOST)`
-   and `SetForegroundWindow`.
+1. `WindowKind::PopUp` was not topmost. Now fixed upstream; the overlay still
+   calls `SetForegroundWindow` so it receives keys.
 2. Titlebar-less windows keep invisible resize borders, and the top edge acts
    as a caption, so edge drags were lost or moved the window. Overlays use
    GPUI fullscreen on Windows instead.
-3. The app quits when its last window closes. A hidden keepalive window keeps
-   it running.
+3. The app quit when its last window closed. Now `QuitMode::Explicit`.
 4. Images painted into a window stay in the GPU atlas after it closes unless
    `drop_image` is called (about 8 MB leaked per 1080p image).
 5. A window closed by the OS (title bar, Alt+F4) leaks entirely (about
-   34 MB per editor). Close requests are routed through `remove_window`.
+   34 MB per editor): its drag-drop registration is revoked after the HWND is
+   destroyed, which fails. Close requests are routed through `remove_window`.
 6. The image clipboard writes only PNG, which many apps can't paste. `arboard`
    is used instead.
 
@@ -116,8 +119,6 @@ Still open:
 - A selection dragged onto another monitor gets stuck until Esc.
 - At 5K, typing re-renders the full image per keystroke (≈ 30 ms). Caching the
   layers beneath the edited text would fix it if needed.
-- GPUI 0.2.2 on crates.io is a year old. Check whether Zed `main` fixes items
-  4–5 before deciding.
 
 ## Proposed editor design
 

@@ -12,7 +12,9 @@ snip-core = { path = "crates/snip-core" }
 anyhow = "1"
 cosmic-text = "0.19"
 global-hotkey = "0.8"
-gpui = "0.2.2"
+# GPUI isn't released on crates.io past 0.2.2; pin Zed's source. Bump both together.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "9ab0715969e9854f2efe61a9d782e7698e5fe6d2" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "9ab0715969e9854f2efe61a9d782e7698e5fe6d2" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tiny-skia = "0.12"
 xcap = "0.9"

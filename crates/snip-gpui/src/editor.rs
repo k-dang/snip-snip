@@ -121,10 +121,10 @@ struct Editor {
 impl Editor {
     fn new(image: RgbaImage, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
-        // GPUI 0.2.2 on Windows leaks a window closed by the OS (title bar,
-        // Alt+F4), but not one closed with `remove_window`, so every close
-        // goes through `close`.
+        window.focus(&focus, cx);
+        // GPUI on Windows leaks a window closed by the OS (title bar, Alt+F4):
+        // its drag-drop registration is revoked after the HWND is gone. One
+        // closed with `remove_window` is freed, so every close goes through `close`.
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             this.update(cx, |this, _| this.close(window)).ok();
@@ -176,7 +176,7 @@ impl Editor {
         let Some(viewport) = self.viewport.get() else {
             return;
         };
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let p = viewport.to_image(event.position);
         let (width, height) = self.doc.image.dimensions();
         let inside = (0.0..width as f32).contains(&p.x) && (0.0..height as f32).contains(&p.y);
@@ -504,7 +504,7 @@ fn paint_canvas(
         height: h,
     });
     window
-        .paint_image(image_bounds, Default::default(), preview, 0, false)
+        .paint_image(image_bounds, image_bounds, Default::default(), preview, 0, false)
         .ok();
     // Keeps the image edge visible when the screenshot is as dark as the editor.
     window.paint_quad(outline(

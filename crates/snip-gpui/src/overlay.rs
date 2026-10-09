@@ -64,7 +64,7 @@ pub fn start(cx: &mut App) {
         match opened {
             Ok(handle) => {
                 handle
-                    .update(cx, |_, window, _| platform::raise_and_focus(window))
+                    .update(cx, |_, window, _| platform::take_foreground(window))
                     .ok();
                 windows.push(handle);
             }
@@ -120,7 +120,7 @@ struct Overlay {
 impl Overlay {
     fn new(capture: MonitorCapture, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         Self {
             texture: capture::to_render_image(&capture.image),
             capture,
@@ -160,8 +160,6 @@ impl Overlay {
         };
         let image = image::imageops::crop_imm(&self.capture.image, rect.x, rect.y, rect.width, rect.height)
             .to_image();
-        // Open the editor before closing the overlays so the app never has
-        // zero windows (GPUI on Windows quits when the last window closes).
         editor::open(image, self.pixels_per_point(), cx);
         finish(cx);
     }
@@ -206,7 +204,7 @@ impl Render for Overlay {
                     |_, _, _| {},
                     move |bounds, _, window, _| {
                         window
-                            .paint_image(bounds, Default::default(), texture, 0, false)
+                            .paint_image(bounds, bounds, Default::default(), texture, 0, false)
                             .ok();
                         paint_dim_outside(window, bounds, selection);
                         if let Some(selection) = selection {
