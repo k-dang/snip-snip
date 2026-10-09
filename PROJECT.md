@@ -94,26 +94,23 @@ on the pinned GPUI:
 
 Clipboard holds PNG, `CF_DIBV5`, and `CF_DIB`. Save writes a PNG.
 
-GPUI problems found on 0.2.2 (all Windows), rechecked on the pinned commit:
+GPUI problems found on Windows. Three found on 0.2.2 are fixed in the pinned
+commit: `PopUp` windows are topmost, `QuitMode::Explicit` keeps the app alive
+with no windows, and closing a window frees its GPU atlas. Still present:
 
-1. Fixed upstream: `WindowKind::PopUp` was not topmost.
-2. Fixed upstream: the app quit when its last window closed. Now
-   `QuitMode::Explicit`.
-3. Fixed upstream: images painted into a window stayed in the GPU atlas after
-   it closed. An image replaced in a still-open window must still be dropped
-   with `drop_image`, as the editor does on every edit.
-4. Still present: a titlebar-less window keeps a caption style whose invisible
-   frame extends it ~8 px past its bounds, so adjacent overlays overlap and
-   steal edge clicks. Overlays use GPUI fullscreen on Windows instead.
-5. Still present: a window closed by the OS (title bar, Alt+F4) leaks entirely
-   (about 34 MB per editor): its drag-drop registration is revoked after the
-   HWND is destroyed, which fails. The editor redirects OS closes to
+1. A titlebar-less window keeps a caption style whose invisible frame extends
+   it ~8 px past its bounds, so adjacent overlays overlap and steal edge
+   clicks. Overlays use GPUI fullscreen on Windows instead.
+2. A window closed by the OS (title bar, Alt+F4) leaks entirely (about 34 MB
+   per editor): its drag-drop registration is revoked after the HWND is
+   destroyed, which fails. Overlay and editor redirect OS closes to
    `remove_window`.
-6. Still present: the image clipboard writes only PNG, which many apps can't
-   paste. `arboard` is used instead.
-
-A window opened from a background app isn't activated, so the overlay calls
-GPUI's `activate_window` to receive keys.
+3. The image clipboard writes only PNG, which many apps can't paste.
+   `arboard` is used instead.
+4. A window opened from a background app isn't activated, so it wouldn't
+   receive keys. Overlay and editor call `activate_window`.
+5. A painted image stays in the window's GPU atlas until the window closes,
+   so the editor drops each replaced preview with `drop_image`.
 
 Still open:
 

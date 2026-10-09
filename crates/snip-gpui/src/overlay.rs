@@ -75,11 +75,10 @@ pub fn start(cx: &mut App) {
     cx.set_global(ActiveSnip { windows });
 }
 
-/// On Windows, a titlebar-less GPUI window keeps a caption style whose
-/// invisible frame extends it ~8 px past its bounds, so adjacent overlays
-/// overlap and steal each other's edge clicks. GPUI's fullscreen is a
-/// borderless window covering exactly the monitor, which is an overlay. On macOS fullscreen means a new Space
-/// with an animation, so there a `PopUp` window at the display bounds is used.
+/// On Windows, a titlebar-less GPUI window extends ~8 px past its bounds, so
+/// adjacent overlays would steal each other's edge clicks; GPUI's fullscreen is
+/// a borderless window exactly covering the monitor. On macOS fullscreen means
+/// a new Space with an animation, so a `PopUp` at the display bounds is used.
 fn overlay_bounds(display: Bounds<Pixels>) -> WindowBounds {
     if cfg!(windows) {
         WindowBounds::Fullscreen(display)
@@ -115,6 +114,11 @@ impl Overlay {
     fn new(capture: MonitorCapture, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // An OS close (Alt+F4) of one overlay ends the whole snip, as Esc does.
+        window.on_window_should_close(cx, |_, cx| {
+            finish(cx);
+            false
+        });
         Self {
             texture: capture::to_render_image(&capture.image),
             capture,
