@@ -6,7 +6,6 @@
 mod capture;
 mod editor;
 mod overlay;
-mod platform;
 
 use anyhow::{Context as _, Result};
 use futures::StreamExt;

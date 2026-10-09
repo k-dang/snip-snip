@@ -80,35 +80,40 @@ editor: `P` pencil, `T` text, `C` crop, `Ctrl/Cmd+C` copy, `Ctrl/Cmd+S` save,
   dependency pinned to a Zed commit, since crates.io stops at the year-old
   0.2.2 and the split `gpui_platform` crates are unpublished.
 
-Verified end-to-end on Windows 11 with two 1920×1080 monitors at 100% scale:
+Verified end-to-end on Windows 11 with two 1920×1080 monitors at 100% scale,
+on the pinned GPUI:
 
 | Measure | Result |
 | --- | --- |
-| Hotkey → overlay first frame | 70–100 ms (capture of both monitors ≈ 33 ms) |
-| Exported pixels vs. screen | 0 differing pixels on both monitors |
-| Edit commit (re-render + texture prep), 1080p | ≈ 4 ms |
+| Hotkey → overlay first frame | 70–105 ms (capture of both monitors ≈ 35 ms) |
+| Copied pixels vs. screen | Identical on both monitors (only live content, e.g. video, differed) |
+| Edit commit (re-render + texture prep), 1700×900 | ≈ 3 ms |
 | Composite, 5K with 40 annotations | ≈ 22 ms (`render_timing` example) |
 | Idle CPU / memory | ≈ 0% / ≈ 45 MB working set |
-| Memory over repeated snips | Flat after the fixes below |
+| Memory over repeated snips | Flat |
 
 Clipboard holds PNG, `CF_DIBV5`, and `CF_DIB`. Save writes a PNG.
 
-GPUI problems found on Windows. Items 1 and 3 were found on 0.2.2 and are
-fixed in the pinned commit:
+GPUI problems found on 0.2.2 (all Windows), rechecked on the pinned commit:
 
-1. `WindowKind::PopUp` was not topmost. Now fixed upstream; the overlay still
-   calls `SetForegroundWindow` so it receives keys.
-2. Titlebar-less windows keep invisible resize borders, and the top edge acts
-   as a caption, so edge drags were lost or moved the window. Overlays use
-   GPUI fullscreen on Windows instead.
-3. The app quit when its last window closed. Now `QuitMode::Explicit`.
-4. Images painted into a window stay in the GPU atlas after it closes unless
-   `drop_image` is called (about 8 MB leaked per 1080p image).
-5. A window closed by the OS (title bar, Alt+F4) leaks entirely (about
-   34 MB per editor): its drag-drop registration is revoked after the HWND is
-   destroyed, which fails. Close requests are routed through `remove_window`.
-6. The image clipboard writes only PNG, which many apps can't paste. `arboard`
-   is used instead.
+1. Fixed upstream: `WindowKind::PopUp` was not topmost.
+2. Fixed upstream: the app quit when its last window closed. Now
+   `QuitMode::Explicit`.
+3. Fixed upstream: images painted into a window stayed in the GPU atlas after
+   it closed. An image replaced in a still-open window must still be dropped
+   with `drop_image`, as the editor does on every edit.
+4. Still present: a titlebar-less window keeps a caption style whose invisible
+   frame extends it ~8 px past its bounds, so adjacent overlays overlap and
+   steal edge clicks. Overlays use GPUI fullscreen on Windows instead.
+5. Still present: a window closed by the OS (title bar, Alt+F4) leaks entirely
+   (about 34 MB per editor): its drag-drop registration is revoked after the
+   HWND is destroyed, which fails. The editor redirects OS closes to
+   `remove_window`.
+6. Still present: the image clipboard writes only PNG, which many apps can't
+   paste. `arboard` is used instead.
+
+A window opened from a background app isn't activated, so the overlay calls
+GPUI's `activate_window` to receive keys.
 
 Still open:
 

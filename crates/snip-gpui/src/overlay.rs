@@ -13,7 +13,7 @@ use snip_core::{Point, Rect};
 
 use crate::{
     capture::{self, MonitorCapture},
-    editor, platform,
+    editor,
 };
 
 /// The overlay windows of the snip in progress. Present only while snipping,
@@ -62,22 +62,23 @@ pub fn start(cx: &mut App) {
             cx.new(|cx| Overlay::new(capture, window, cx))
         });
         match opened {
-            Ok(handle) => {
-                handle
-                    .update(cx, |_, window, _| platform::take_foreground(window))
-                    .ok();
-                windows.push(handle);
-            }
+            Ok(handle) => windows.push(handle),
             Err(err) => eprintln!("snip: failed to open overlay: {err:#}"),
         }
+    }
+    // Opening a window from a background app doesn't activate it, so keys
+    // (Esc) would still go to the previously focused app. Any one overlay
+    // will do: each handles Esc for the whole snip.
+    if let Some(first) = windows.first() {
+        first.update(cx, |_, window, _| window.activate_window()).ok();
     }
     cx.set_global(ActiveSnip { windows });
 }
 
-/// On Windows, a titlebar-less GPUI window reserves invisible resize borders
-/// on its left, right and bottom edges (clicks there never reach us) unless
-/// it is fullscreen, and GPUI's fullscreen is a borderless window covering the
-/// monitor, which is exactly an overlay. On macOS fullscreen means a new Space
+/// On Windows, a titlebar-less GPUI window keeps a caption style whose
+/// invisible frame extends it ~8 px past its bounds, so adjacent overlays
+/// overlap and steal each other's edge clicks. GPUI's fullscreen is a
+/// borderless window covering exactly the monitor, which is an overlay. On macOS fullscreen means a new Space
 /// with an animation, so there a `PopUp` window at the display bounds is used.
 fn overlay_bounds(display: Bounds<Pixels>) -> WindowBounds {
     if cfg!(windows) {
@@ -97,14 +98,7 @@ fn finish(cx: &mut App) {
         let windows = snip.windows.clone();
         cx.remove_global::<ActiveSnip>();
         for window in windows {
-            window
-                .update(cx, |overlay, window, _| {
-                    // GPUI keeps a painted image in the GPU atlas after its
-                    // window closes unless it is dropped explicitly.
-                    window.drop_image(overlay.texture.clone()).ok();
-                    window.remove_window();
-                })
-                .ok();
+            window.update(cx, |_, window, _| window.remove_window()).ok();
         }
     });
 }

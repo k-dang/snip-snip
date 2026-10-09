@@ -124,10 +124,9 @@ impl Editor {
         window.focus(&focus, cx);
         // GPUI on Windows leaks a window closed by the OS (title bar, Alt+F4):
         // its drag-drop registration is revoked after the HWND is gone. One
-        // closed with `remove_window` is freed, so every close goes through `close`.
-        let this = cx.weak_entity();
-        window.on_window_should_close(cx, move |window, cx| {
-            this.update(cx, |this, _| this.close(window)).ok();
+        // closed with `remove_window` is freed, so OS closes are redirected.
+        window.on_window_should_close(cx, |window, _| {
+            window.remove_window();
             false
         });
         let status = format!("{} × {} px", image.width(), image.height()).into();
@@ -144,19 +143,14 @@ impl Editor {
         }
     }
 
-    fn close(&mut self, window: &mut Window) {
-        // GPUI keeps a painted image in the GPU atlas after its window closes
-        // unless it is dropped explicitly.
-        window.drop_image(self.preview.clone()).ok();
-        window.remove_window();
-    }
-
     /// Re-renders the preview from the document after a committed edit.
     fn rerender(&mut self, window: &mut Window) {
         let started = Instant::now();
         let composite = self.renderer.composite(&self.doc);
         let rendered = started.elapsed();
         let preview = to_render_image(&composite);
+        // The window's GPU atlas keeps every image it has painted until the
+        // window closes, so drop the replaced one.
         window
             .drop_image(std::mem::replace(&mut self.preview, preview))
             .ok();
@@ -259,7 +253,7 @@ impl Editor {
         }
 
         match keystroke.key.as_str() {
-            "escape" => self.close(window),
+            "escape" => window.remove_window(),
             "p" => self.set_tool(Tool::Pencil, window, cx),
             "t" => self.set_tool(Tool::Text, window, cx),
             "c" => self.set_tool(Tool::Crop, window, cx),

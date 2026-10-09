@@ -4809,9 +4809,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
- "raw-window-handle",
  "snip-core",
- "windows 0.61.3",
  "xcap",
 ]
 

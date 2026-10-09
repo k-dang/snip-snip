@@ -22,7 +22,3 @@ gpui.workspace = true
 gpui_platform.workspace = true
 image.workspace = true
 xcap.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-raw-window-handle.workspace = true
-windows.workspace = true
