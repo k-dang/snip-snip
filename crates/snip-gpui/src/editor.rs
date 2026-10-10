@@ -53,6 +53,9 @@ pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
         focus: true,
         ..Default::default()
     };
+    // A background app's new window opens behind the frontmost app on macOS;
+    // the app itself must be activated to bring it forward.
+    cx.activate(true);
     let opened = cx.open_window(options, |window, cx| {
         window.activate_window();
         cx.new(|cx| Editor::new(image, window, cx))

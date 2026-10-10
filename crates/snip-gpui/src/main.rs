@@ -50,6 +50,15 @@ fn run(cx: &mut App) -> Result<()> {
     })
     .detach();
 
+    // The editor activates the app on macOS; once its last window closes, give
+    // focus back to the app that was in use before the snip.
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.hide();
+        }
+    })
+    .detach();
+
     eprintln!("snip-snip running; press Alt+Shift+S to snip");
     Ok(())
 }
