@@ -5,8 +5,8 @@ crop in the editor, then save or copy. It targets Windows and macOS; Linux
 comes later. Each slice gets its own `PRD.md` under `.scratch/` when it is
 picked up.
 
-1. **Editor core model:** arrow and rectangle shapes, hit testing, bounds,
-   moving, and undo/redo. See `editor-core-model/PRD.md`.
+1. **Editor core model (complete):** arrow and rectangle shapes, hit testing,
+   bounds, moving, and undo/redo.
 2. **Selection:** a Select tool, a selection outline, dragging to move, deleting,
    handles for arrow endpoints and rectangle corners, double-click to re-edit
    text. Shift constrains arrows to 45° steps and rectangles to squares.

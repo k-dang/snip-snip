@@ -10,7 +10,7 @@ pub fn track<V: 'static>(
     window: &mut Window,
     view: Entity<V>,
     on_move: fn(&mut V, &MouseMoveEvent, &mut Window, &mut Context<V>),
-    on_up: fn(&mut V, &mut Window, &mut Context<V>),
+    on_up: fn(&mut V, &MouseUpEvent, &mut Window, &mut Context<V>),
 ) {
     window.on_mouse_event({
         let view = view.clone();
@@ -22,7 +22,7 @@ pub fn track<V: 'static>(
     });
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-            view.update(cx, |view, cx| on_up(view, window, cx));
+            view.update(cx, |view, cx| on_up(view, event, window, cx));
         }
     });
 }

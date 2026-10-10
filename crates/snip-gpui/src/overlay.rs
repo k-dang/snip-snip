@@ -118,6 +118,9 @@ struct Overlay {
 
 impl Overlay {
     fn new(capture: MonitorCapture, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Borderless overlays still need a name for accessibility and window
+        // switchers. No title bar is displayed.
+        window.set_window_title("snip-snip capture");
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         // An OS close (Alt+F4) of one overlay ends the whole snip, as Esc does.
@@ -210,7 +213,14 @@ impl Render for Overlay {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        drag::track(window, this, Self::on_mouse_move, |this, _, cx| {
+                        drag::track(window, this, Self::on_mouse_move, |this, event, window, cx| {
+                            if let Some((_, end)) = &mut this.selection {
+                                let size = window.viewport_size();
+                                *end = event
+                                    .position
+                                    .max(&point(px(0.), px(0.)))
+                                    .min(&point(size.width, size.height));
+                            }
                             this.on_mouse_up(cx)
                         });
                         window
