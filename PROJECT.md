@@ -49,7 +49,7 @@ Build the smallest prototype that exercises the actual product workflow:
 2. One pencil tool and one editable text annotation.
 3. Cropping.
 4. Save to PNG and copy an image that can be pasted into another application.
-5. Validate on Windows and macOS, including mixed-scale multiple monitors.
+5. Validate on Windows and macOS.
 
 The spike must establish:
 
@@ -66,7 +66,7 @@ If these work cleanly on both platforms, favor GPUI. If they require substantial
 framework patches or leave export unreliable, favor Tauri. This is a feasibility
 exercise, not the full editor implementation.
 
-## Spike status (October 8, 2026)
+## Spike status (October 9, 2026)
 
 Run with `cargo run --release -p snip-gpui`, then press **Alt+Shift+S**. In the
 editor: `P` pencil, `T` text, `C` crop, `Ctrl/Cmd+C` copy, `Ctrl/Cmd+S` save,
@@ -112,13 +112,26 @@ with no windows, and closing a window frees its GPU atlas. Still present:
 5. A painted image stays in the window's GPU atlas until the window closes,
    so the editor drops each replaced preview with `drop_image`.
 
+The full workflow (hotkey, snip, pencil, text, crop, copy, save) was then
+verified end to end on macOS on a MacBook Air's built-in Retina display, on
+the same pinned GPUI. The macOS problems found, all worked around in the app:
+
+1. AppKit keeps titled windows below the menu bar, and every GPUI window has
+   a title bar style, so the overlay's frozen frame was offset by 33 pt. The
+   overlay calls `toggle_simple_fullscreen`, which swaps in a borderless style
+   covering the whole screen. Real fullscreen would open a new Space with an
+   animation.
+2. A window opened from a background app appears behind the frontmost app.
+   The editor activates the app first, and the app hides itself when its last
+   window closes so focus returns to the previous app.
+3. `gpui_platform` draws no UI text unless its `font-kit` feature is enabled.
+4. GPUI compiles its Metal shaders with full Xcode. With only the Command
+   Line Tools, the `gpui_platform/runtime_shaders` feature is needed.
+
 Still open:
 
-- macOS has not been run yet. Overlay level, focus, and Retina mapping are
-  coded but unverified.
-- Mixed-DPI monitors are untested. This machine has two 100% displays, and the
-  display settings were not changed.
-- A selection dragged onto another monitor gets stuck until Esc.
+- macOS timings and a pixel-exact copy check haven't been recorded; the
+  Windows table above has no macOS counterpart yet.
 - At 5K, typing re-renders the full image per keystroke (≈ 30 ms). Caching the
   layers beneath the edited text would fix it if needed.
 

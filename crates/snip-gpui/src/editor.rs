@@ -19,7 +19,7 @@ use gpui::{
 };
 use snip_core::{Annotation, Color, Document, Point, Rect, Renderer, RgbaImage, Stroke, Text};
 
-use crate::capture::to_render_image;
+use crate::{capture::to_render_image, drag};
 
 const INK: Color = Color::rgb(0xE5, 0x48, 0x4D);
 /// Pencil width and text size in logical pixels; converted to image pixels
@@ -200,7 +200,7 @@ impl Editor {
         cx.notify();
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(viewport) = self.viewport.get() else {
             return;
         };
@@ -365,6 +365,7 @@ impl Render for Editor {
         let overlay = self.overlay();
         let device_scale = window.scale_factor();
         let live_width = PENCIL_WIDTH * device_scale;
+        let this = cx.entity();
 
         div()
             .size_full()
@@ -407,15 +408,11 @@ impl Render for Editor {
                         MouseButton::Left,
                         cx.listener(|this, event, window, cx| this.on_mouse_down(event, window, cx)),
                     )
-                    .on_mouse_move(cx.listener(|this, event, _, cx| this.on_mouse_move(event, cx)))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| this.on_mouse_up(window, cx)),
-                    )
                     .child(
                         canvas(
                             |_, _, _| {},
                             move |bounds, _, window, _| {
+                                drag::track(window, this, Self::on_mouse_move, Self::on_mouse_up);
                                 let viewport = fit(bounds, image_size, device_scale);
                                 viewport_cell.set(Some(viewport));
                                 paint_canvas(window, viewport, image_size, preview, overlay, live_width);
