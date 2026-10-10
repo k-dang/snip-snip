@@ -20,6 +20,14 @@ cargo run --release -p snip-gpui
 
 The app runs in the background with no window. Press `Alt+Shift+S` to snip.
 
+On macOS, the build compiles GPUI's Metal shaders with full Xcode. With only the Command Line Tools, compile them at runtime instead:
+
+```sh
+cargo run --release -p snip-gpui --features gpui_platform/runtime_shaders
+```
+
+macOS also asks for Screen Recording permission on the first snip.
+
 ## Usage
 
 | Where | Key | Action |

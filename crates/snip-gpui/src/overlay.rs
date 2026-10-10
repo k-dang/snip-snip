@@ -56,6 +56,12 @@ pub fn start(cx: &mut App) {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
+            // AppKit keeps titled windows (every GPUI window has a title bar
+            // style) below the menu bar. Simple fullscreen swaps in a
+            // borderless style and sets the frame to the whole screen.
+            if cfg!(target_os = "macos") {
+                window.toggle_simple_fullscreen();
+            }
             window.on_next_frame(move |_, _| {
                 eprintln!("snip: overlay first frame at {:?}", started.elapsed());
             });
@@ -77,7 +83,8 @@ pub fn start(cx: &mut App) {
 /// On Windows, a titlebar-less GPUI window extends ~8 px past its bounds, so
 /// adjacent overlays would steal each other's edge clicks; GPUI's fullscreen is
 /// a borderless window exactly covering the monitor. On macOS fullscreen means
-/// a new Space with an animation, so a `PopUp` at the display bounds is used.
+/// a new Space with an animation, so a `PopUp` at the display bounds is used
+/// and then moved over the menu bar by simple fullscreen.
 fn overlay_bounds(display: Bounds<Pixels>) -> WindowBounds {
     if cfg!(windows) {
         WindowBounds::Fullscreen(display)
