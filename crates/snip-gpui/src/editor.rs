@@ -295,6 +295,8 @@ impl Editor {
 
     fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let image = self.export(window);
+        // GPUI's clipboard writes only PNG, which many apps can't paste;
+        // arboard also writes CF_DIBV5/CF_DIB on Windows.
         let data = arboard::ImageData {
             width: image.width() as usize,
             height: image.height() as usize,
