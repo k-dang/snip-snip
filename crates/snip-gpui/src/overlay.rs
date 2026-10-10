@@ -7,13 +7,13 @@ use std::{sync::Arc, time::Instant};
 use gpui::{
     App, Bounds, Context, FocusHandle, Global, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
     Pixels, Render, RenderImage, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas, div,
-    fill, hsla, outline, point, prelude::*,
+    fill, hsla, outline, point, prelude::*, px,
 };
 use snip_core::{Point, Rect};
 
 use crate::{
     capture::{self, MonitorCapture},
-    editor,
+    drag, editor,
 };
 
 /// The overlay windows of the snip in progress. Present only while snipping,
@@ -145,6 +145,18 @@ impl Overlay {
         Point::new(f32::from(p.x) * scale, f32::from(p.y) * scale)
     }
 
+    /// Extends the selection, clamped to this monitor.
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, end)) = &mut self.selection {
+            let size = window.viewport_size();
+            *end = event
+                .position
+                .max(&point(px(0.), px(0.)))
+                .min(&point(size.width, size.height));
+            cx.notify();
+        }
+    }
+
     fn on_mouse_up(&mut self, cx: &mut Context<Self>) {
         let Some((start, end)) = self.selection.take() else {
             return;
@@ -171,6 +183,7 @@ impl Overlay {
 
 impl Render for Overlay {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity();
         let texture = self.texture.clone();
         let selection = self
             .selection
@@ -193,20 +206,13 @@ impl Render for Overlay {
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if let Some((_, end)) = &mut this.selection {
-                    *end = event.position;
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.on_mouse_up(cx)),
-            )
             .child(
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
+                        drag::track(window, this, Self::on_mouse_move, |this, _, cx| {
+                            this.on_mouse_up(cx)
+                        });
                         window
                             .paint_image(bounds, bounds, Default::default(), texture, 0, false)
                             .ok();

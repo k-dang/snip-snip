@@ -4,6 +4,7 @@
 //! region, and annotate it in the editor. Timings are logged to stderr.
 
 mod capture;
+mod drag;
 mod editor;
 mod overlay;
 
