@@ -145,8 +145,7 @@ impl Overlay {
         Point::new(f32::from(p.x) * scale, f32::from(p.y) * scale)
     }
 
-    /// Extends the selection, stopping at the monitor's edges: a selection
-    /// can't span monitors, but dragging past an edge reaches it exactly.
+    /// Extends the selection, clamped to this monitor.
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((_, end)) = &mut self.selection {
             let size = window.viewport_size();
