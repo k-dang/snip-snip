@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use snip_core::{Annotation, Color, Document, Point, Renderer, RgbaImage, Stroke, Text};
+use snip_core::{Annotation, Arrow, Color, Document, Point, Rectangle, Renderer, RgbaImage, Stroke, Text};
 
 fn main() {
     let mut args = std::env::args()
@@ -31,6 +31,18 @@ fn main() {
             content: format!("Annotation {i}"),
             size: 40.0,
             color: Color::rgb(229, 72, 77),
+        }));
+        doc.annotations.push(Annotation::Arrow(Arrow {
+            tail: Point::new(width as f32 / 2.0, y),
+            head: Point::new(width as f32 / 2.0 + 160.0, y + 40.0),
+            color: Color::rgb(229, 72, 77),
+            width: 6.0,
+        }));
+        doc.annotations.push(Annotation::Rectangle(Rectangle {
+            start: Point::new(width as f32 * 0.75, y),
+            end: Point::new(width as f32 * 0.75 + 120.0, y + 60.0),
+            color: Color::rgb(229, 72, 77),
+            width: 6.0,
         }));
     }
 

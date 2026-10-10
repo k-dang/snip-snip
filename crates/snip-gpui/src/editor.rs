@@ -14,10 +14,12 @@ use std::{
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    PathBuilder, Pixels, Render, RenderImage, SharedString, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, canvas, div, fill, hsla, outline, point, prelude::*, px, rgb, size,
+    MouseUpEvent, PathBuilder, Pixels, Render, RenderImage, SharedString, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, canvas, div, fill, hsla, outline, point, prelude::*, px, rgb, size,
 };
-use snip_core::{Annotation, Color, Document, Point, Rect, Renderer, RgbaImage, Stroke, Text};
+use snip_core::{
+    Annotation, Arrow, Color, Document, History, Point, Rect, Rectangle, Renderer, RgbaImage, Stroke, Text,
+};
 
 use crate::{capture::to_render_image, drag};
 
@@ -26,6 +28,8 @@ const INK: Color = Color::rgb(0xE5, 0x48, 0x4D);
 /// with the editor window's scale factor when the annotation is created.
 const PENCIL_WIDTH: f32 = 3.0;
 const TEXT_SIZE: f32 = 20.0;
+/// Ignore accidental arrow clicks/jitter, measured at screenshot resolution.
+const MIN_ARROW_LENGTH: f32 = 3.0;
 const CANVAS_PADDING: f32 = 16.0;
 
 /// Opens an editor window for a freshly snipped image. `scale` is the source
@@ -68,14 +72,16 @@ pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tool {
     Pencil,
+    Arrow,
+    Rectangle,
     Text,
     Crop,
 }
 
 /// A pointer gesture in progress, in image pixels.
 enum Gesture {
-    Stroke(Vec<Point>),
-    Crop(Point),
+    Annotation(Annotation),
+    Crop { start: Point, previous: Option<Rect> },
 }
 
 /// Where the image is drawn inside the window, recorded during paint so
@@ -109,6 +115,7 @@ impl Viewport {
 
 struct Editor {
     doc: Document,
+    history: History,
     renderer: Renderer,
     /// `renderer.composite(&doc)` as a texture; refreshed by `rerender`.
     preview: Arc<RenderImage>,
@@ -133,9 +140,11 @@ impl Editor {
             false
         });
         let status = format!("{} × {} px", image.width(), image.height()).into();
+        let doc = Document::new(image);
         Self {
-            preview: to_render_image(&image),
-            doc: Document::new(image),
+            preview: to_render_image(&doc.image),
+            history: History::new(&doc),
+            doc,
             renderer: Renderer::new(),
             tool: Tool::Pencil,
             gesture: None,
@@ -164,6 +173,7 @@ impl Editor {
     }
 
     fn set_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_gesture();
         self.finish_text(window);
         self.tool = tool;
         cx.notify();
@@ -177,14 +187,39 @@ impl Editor {
         let p = viewport.to_image(event.position);
         let (width, height) = self.doc.image.dimensions();
         let inside = (0.0..width as f32).contains(&p.x) && (0.0..height as f32).contains(&p.y);
+        self.cancel_gesture();
+        self.finish_text(window);
+        let ink_width = PENCIL_WIDTH * window.scale_factor();
         match self.tool {
-            Tool::Pencil if inside => self.gesture = Some(Gesture::Stroke(vec![p])),
-            Tool::Crop => {
+            Tool::Pencil if inside => {
+                self.gesture = Some(Gesture::Annotation(Annotation::Stroke(Stroke {
+                    points: vec![p],
+                    color: INK,
+                    width: ink_width,
+                })))
+            }
+            Tool::Arrow if inside => {
+                self.gesture = Some(Gesture::Annotation(Annotation::Arrow(Arrow {
+                    tail: p,
+                    head: p,
+                    color: INK,
+                    width: ink_width,
+                })))
+            }
+            Tool::Rectangle if inside => {
+                self.gesture = Some(Gesture::Annotation(Annotation::Rectangle(Rectangle {
+                    start: p,
+                    end: p,
+                    color: INK,
+                    width: ink_width,
+                })))
+            }
+            Tool::Crop if inside => {
+                let previous = self.doc.crop;
                 self.doc.crop = None;
-                self.gesture = Some(Gesture::Crop(p));
+                self.gesture = Some(Gesture::Crop { start: p, previous });
             }
             Tool::Text if inside => {
-                self.finish_text(window);
                 self.editing = Some(self.text_at(p).unwrap_or_else(|| {
                     self.doc.annotations.push(Annotation::Text(Text {
                         origin: p,
@@ -205,26 +240,85 @@ impl Editor {
             return;
         };
         let p = viewport.to_image(event.position);
+        self.update_gesture(p);
+        if self.gesture.is_some() {
+            cx.notify();
+        }
+    }
+
+    fn update_gesture(&mut self, p: Point) {
         match &mut self.gesture {
-            Some(Gesture::Stroke(points)) => points.push(p),
-            Some(Gesture::Crop(start)) => {
+            Some(Gesture::Annotation(Annotation::Stroke(stroke))) => {
+                if stroke.points.last() != Some(&p) {
+                    stroke.points.push(p);
+                }
+            }
+            Some(Gesture::Annotation(Annotation::Arrow(arrow))) => arrow.head = p,
+            Some(Gesture::Annotation(Annotation::Rectangle(rectangle))) => rectangle.end = p,
+            Some(Gesture::Crop { start, .. }) => {
                 let (width, height) = self.doc.image.dimensions();
-                self.doc.crop = Rect::from_corners(*start, p, width, height);
+                self.doc.crop = if start.x == p.x || start.y == p.y {
+                    None
+                } else {
+                    Rect::from_corners(*start, p, width, height)
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(viewport) = self.viewport.get() {
+            self.update_gesture(viewport.to_image(event.position));
+        }
+        match self.gesture.take() {
+            Some(Gesture::Annotation(annotation)) => {
+                let valid = match &annotation {
+                    Annotation::Arrow(a) => {
+                        (a.head.x - a.tail.x).hypot(a.head.y - a.tail.y) >= MIN_ARROW_LENGTH
+                    }
+                    Annotation::Rectangle(r) => !r.is_empty(),
+                    _ => true,
+                };
+                if valid {
+                    self.doc.annotations.push(annotation);
+                    self.history.commit(&self.doc);
+                    self.rerender(window);
+                }
+            }
+            Some(Gesture::Crop { previous, .. }) => {
+                if self.doc.crop.is_none() {
+                    self.doc.crop = previous;
+                }
+                self.history.commit(&self.doc);
             }
             None => return,
         }
         cx.notify();
     }
 
-    fn on_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(Gesture::Stroke(points)) = self.gesture.take() {
-            self.doc.annotations.push(Annotation::Stroke(Stroke {
-                points,
-                color: INK,
-                width: PENCIL_WIDTH * window.scale_factor(),
-            }));
+    /// Unfinished gestures never enter history; a crop must also restore the
+    /// committed crop because its live overlay temporarily changes the model.
+    fn cancel_gesture(&mut self) {
+        if let Some(Gesture::Crop { previous, .. }) = self.gesture.take() {
+            self.doc.crop = previous;
+        }
+    }
+
+    fn restore_history(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_gesture();
+        self.finish_text(window);
+        // Finishing changed text commits it and clears redo, just like any
+        // new edit. An unchanged session preserves the redo branch.
+        let changed = if redo {
+            self.history.redo(&mut self.doc)
+        } else {
+            self.history.undo(&mut self.doc)
+        };
+        if changed {
             self.rerender(window);
         }
+        self.editing = None;
         cx.notify();
     }
 
@@ -232,6 +326,10 @@ impl Editor {
         let keystroke = &event.keystroke;
         let shortcut = keystroke.modifiers.secondary();
         match (shortcut, keystroke.key.as_str()) {
+            (true, "z") => return self.restore_history(keystroke.modifiers.shift, window, cx),
+            (true, "y") if cfg!(windows) && keystroke.modifiers.control => {
+                return self.restore_history(true, window, cx);
+            }
             (true, "c") => return self.copy(window, cx),
             (true, "s") => return self.save(window, cx),
             _ => {}
@@ -256,8 +354,14 @@ impl Editor {
         }
 
         match keystroke.key.as_str() {
+            "escape" if self.gesture.is_some() => {
+                self.cancel_gesture();
+                cx.notify();
+            }
             "escape" => window.remove_window(),
             "p" => self.set_tool(Tool::Pencil, window, cx),
+            "a" => self.set_tool(Tool::Arrow, window, cx),
+            "r" => self.set_tool(Tool::Rectangle, window, cx),
             "t" => self.set_tool(Tool::Text, window, cx),
             "c" => self.set_tool(Tool::Crop, window, cx),
             _ => {}
@@ -271,6 +375,7 @@ impl Editor {
             self.doc.annotations.remove(index);
             self.rerender(window);
         }
+        self.history.commit(&self.doc);
     }
 
     /// The topmost text annotation under `p`, if any.
@@ -281,11 +386,12 @@ impl Editor {
                 let (w, h) = renderer.text_size(t);
                 (t.origin.x..=t.origin.x + w).contains(&p.x) && (t.origin.y..=t.origin.y + h).contains(&p.y)
             }
-            Annotation::Stroke(_) => false,
+            _ => false,
         })
     }
 
     fn export(&mut self, window: &mut Window) -> RgbaImage {
+        self.cancel_gesture();
         self.finish_text(window);
         let started = Instant::now();
         let image = self.renderer.export(&self.doc);
@@ -336,16 +442,16 @@ impl Editor {
 
     /// What the canvas paints this frame, in image pixels.
     fn overlay(&mut self) -> CanvasOverlay {
-        let live_stroke = match &self.gesture {
-            Some(Gesture::Stroke(points)) => Some(points.clone()),
+        let live_annotation = match &self.gesture {
+            Some(Gesture::Annotation(annotation)) => Some(annotation.clone()),
             _ => None,
         };
         let caret = self.editing.and_then(|i| match &self.doc.annotations[i] {
             Annotation::Text(t) => Some((t.clone(), self.renderer.text_size(t))),
-            Annotation::Stroke(_) => None,
+            _ => None,
         });
         CanvasOverlay {
-            live_stroke,
+            live_annotation,
             crop: self.doc.crop,
             caret: caret.map(|(t, (w, h))| (Point::new(t.origin.x + w, t.origin.y), h)),
         }
@@ -353,7 +459,7 @@ impl Editor {
 }
 
 struct CanvasOverlay {
-    live_stroke: Option<Vec<Point>>,
+    live_annotation: Option<Annotation>,
     crop: Option<Rect>,
     /// Caret top and height, in image pixels.
     caret: Option<(Point, f32)>,
@@ -366,7 +472,6 @@ impl Render for Editor {
         let viewport_cell = self.viewport.clone();
         let overlay = self.overlay();
         let device_scale = window.scale_factor();
-        let live_width = PENCIL_WIDTH * device_scale;
         let this = cx.entity();
 
         div()
@@ -380,18 +485,36 @@ impl Render for Editor {
             .on_key_down(cx.listener(|this, event, window, cx| this.on_key_down(event, window, cx)))
             .child(
                 div()
-                    .h(px(44.))
+                    .min_h(px(44.))
+                    .py_1p5()
                     .px_3()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(0x333336))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.cancel_gesture();
+                            this.finish_text(window);
+                            cx.notify();
+                        }),
+                    )
                     .child(self.tool_button("Pencil", "P", Tool::Pencil, cx))
+                    .child(self.tool_button("Arrow", "A", Tool::Arrow, cx))
+                    .child(self.tool_button("Rectangle", "R", Tool::Rectangle, cx))
                     .child(self.tool_button("Text", "T", Tool::Text, cx))
                     .child(self.tool_button("Crop", "C", Tool::Crop, cx))
-                    .child(div().flex_1())
-                    .child(div().text_color(rgb(0x9A9AA0)).child(self.status.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(0x9A9AA0))
+                            .child(self.status.clone()),
+                    )
                     .child(action_button("Copy", cx, |this, window, cx| {
                         this.copy(window, cx)
                     }))
@@ -417,7 +540,7 @@ impl Render for Editor {
                                 drag::track(window, this, Self::on_mouse_move, Self::on_mouse_up);
                                 let viewport = fit(bounds, image_size, device_scale);
                                 viewport_cell.set(Some(viewport));
-                                paint_canvas(window, viewport, image_size, preview, overlay, live_width);
+                                paint_canvas(window, viewport, image_size, preview, overlay);
                             },
                         )
                         .size_full(),
@@ -491,7 +614,6 @@ fn paint_canvas(
     (w, h): (u32, u32),
     preview: Arc<RenderImage>,
     overlay: CanvasOverlay,
-    live_width: f32,
 ) {
     let image_bounds = viewport.rect_to_window(Rect {
         x: 0,
@@ -509,8 +631,10 @@ fn paint_canvas(
         Default::default(),
     ));
 
-    if let Some(points) = overlay.live_stroke {
-        paint_live_stroke(window, viewport, &points, live_width);
+    if let Some(annotation) = overlay.live_annotation {
+        window.with_content_mask(Some(gpui::ContentMask { bounds: image_bounds }), |window| {
+            paint_live_annotation(window, viewport, &annotation);
+        });
     }
 
     if let Some((top, height)) = overlay.caret {
@@ -559,6 +683,48 @@ fn paint_live_stroke(window: &mut Window, viewport: Viewport, points: &[Point], 
     }
     if let Ok(path) = path.build() {
         window.paint_path(path, to_hsla(INK));
+    }
+}
+
+/// Live shapes use the core's geometry and matching butt caps/miter joins.
+/// The committed preview and all exports use the core rasterizer itself.
+fn paint_live_annotation(window: &mut Window, viewport: Viewport, annotation: &Annotation) {
+    match annotation {
+        Annotation::Stroke(stroke) => paint_live_stroke(window, viewport, &stroke.points, stroke.width),
+        Annotation::Arrow(arrow) => {
+            let Some(geometry) = arrow.geometry() else { return };
+            let mut shaft = PathBuilder::stroke(px(arrow.width * viewport.scale));
+            shaft.move_to(viewport.to_window(geometry.shaft[0]));
+            shaft.line_to(viewport.to_window(geometry.shaft[1]));
+            if let Ok(path) = shaft.build() {
+                window.paint_path(path, to_hsla(arrow.color));
+            }
+            let mut head = PathBuilder::fill();
+            head.move_to(viewport.to_window(geometry.head[0]));
+            for point in &geometry.head[1..] {
+                head.line_to(viewport.to_window(*point));
+            }
+            head.close();
+            if let Ok(path) = head.build() {
+                window.paint_path(path, to_hsla(arrow.color));
+            }
+        }
+        Annotation::Rectangle(rectangle) => {
+            if rectangle.is_empty() {
+                return;
+            }
+            let corners = rectangle.corners();
+            let mut path = PathBuilder::stroke(px(rectangle.width * viewport.scale));
+            path.move_to(viewport.to_window(corners[0]));
+            for point in &corners[1..] {
+                path.line_to(viewport.to_window(*point));
+            }
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, to_hsla(rectangle.color));
+            }
+        }
+        Annotation::Text(_) => {}
     }
 }
 

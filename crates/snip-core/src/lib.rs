@@ -6,8 +6,12 @@
 //! editor preview and save/copy all use it, so what you see is what you export.
 
 mod document;
+mod history;
 mod render;
 
-pub use document::{Annotation, Color, Document, Point, Rect, Stroke, Text};
+pub use document::{
+    Annotation, Arrow, ArrowGeometry, Bounds, Color, Document, Point, Rect, Rectangle, Stroke, Text,
+};
+pub use history::History;
 pub use image::RgbaImage;
 pub use render::{Renderer, encode_png};

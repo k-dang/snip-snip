@@ -5,7 +5,8 @@ A fast screenshot and annotation tool written entirely in Rust, inspired by [Sho
 ## Features
 
 - **Global shortcut** (`Alt+Shift+S`): freezes every monitor and opens a selection overlay.
-- **Editor** with a pencil, editable text, and cropping.
+- **Editor** with a pencil, arrows, rectangle outlines, editable text, cropping,
+  and undo/redo.
 - **Copy** to the clipboard as PNG and DIB, so it pastes into most apps.
 - **Save** as a PNG at the original screenshot resolution.
 - **What you see is what you export**: the editor preview is the same render that gets saved or copied.
@@ -36,18 +37,23 @@ macOS also asks for Screen Recording permission on the first snip.
 | Overlay | Drag | Select a region and open it in the editor |
 | Overlay | `Esc` | Cancel |
 | Editor | `P` | Pencil |
+| Editor | `A` | Arrow (drag toward the tip) |
+| Editor | `R` | Rectangle outline |
 | Editor | `T` | Text (click to place; `Enter` or `Esc` to finish) |
 | Editor | `C` | Crop |
+| Editor | `Ctrl/Cmd+Z` | Undo one completed edit |
+| Editor | `Ctrl/Cmd+Shift+Z` | Redo (`Ctrl+Y` also works on Windows) |
 | Editor | `Ctrl/Cmd+C` | Copy image |
 | Editor | `Ctrl/Cmd+S` | Save as PNG |
-| Editor | `Esc` | Close |
+| Editor | `Esc` | Finish text or cancel a drag; otherwise close |
 
 ## Project layout
 
 ```
 crates/
   snip-core/   Document model and the only renderer (tiny-skia + cosmic-text,
-               bundled Inter font). No UI dependencies; unit tested.
+               bundled Inter font), geometry queries, and snapshot history.
+               No UI dependencies; integration tested.
   snip-gpui/   The app: global hotkey, screen capture (xcap), the frozen-frame
                overlay, and the editor. Builds the `snip-snip` binary.
 ```

@@ -76,6 +76,131 @@ pub struct Text {
 pub enum Annotation {
     Stroke(Stroke),
     Text(Text),
+    Arrow(Arrow),
+    Rectangle(Rectangle),
+}
+
+/// An arrow whose filled head ends exactly at `head`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Arrow {
+    pub tail: Point,
+    pub head: Point,
+    pub color: Color,
+    pub width: f32,
+}
+
+/// Shared by rasterization, hit testing, bounds, and live UI painting.
+#[derive(Clone, Copy, Debug)]
+pub struct ArrowGeometry {
+    pub shaft: [Point; 2],
+    pub head: [Point; 3],
+}
+
+impl Arrow {
+    /// Short arrows shrink the head to fit; the shaft has butt caps so it
+    /// never projects beyond the tip. Empty arrows have no geometry.
+    pub fn geometry(&self) -> Option<ArrowGeometry> {
+        let dx = self.head.x - self.tail.x;
+        let dy = self.head.y - self.tail.y;
+        let length = dx.hypot(dy);
+        if length <= 0.0 || self.width <= 0.0 {
+            return None;
+        }
+        let (ux, uy) = (dx / length, dy / length);
+        let head_length = (self.width * 4.0).min(length);
+        let half_width = head_length / 2.0;
+        let base = Point::new(self.head.x - ux * head_length, self.head.y - uy * head_length);
+        Some(ArrowGeometry {
+            shaft: [self.tail, base],
+            head: [
+                self.head,
+                Point::new(base.x - uy * half_width, base.y + ux * half_width),
+                Point::new(base.x + uy * half_width, base.y - ux * half_width),
+            ],
+        })
+    }
+}
+
+/// An unfilled box, with opposite corners in any order, in image pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rectangle {
+    pub start: Point,
+    pub end: Point,
+    pub color: Color,
+    pub width: f32,
+}
+
+/// Fractional image-pixel bounds. Renderer bounds also cover rasterization's
+/// antialiasing fringe; they are independent of the image clip and crop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds {
+    pub min: Point,
+    pub max: Point,
+}
+
+impl Bounds {
+    pub fn from_corners(a: Point, b: Point) -> Self {
+        Self {
+            min: Point::new(a.x.min(b.x), a.y.min(b.y)),
+            max: Point::new(a.x.max(b.x), a.y.max(b.y)),
+        }
+    }
+
+    pub fn grow(self, amount: f32) -> Self {
+        Self {
+            min: Point::new(self.min.x - amount, self.min.y - amount),
+            max: Point::new(self.max.x + amount, self.max.y + amount),
+        }
+    }
+
+    pub fn contains(self, point: Point) -> bool {
+        (self.min.x..=self.max.x).contains(&point.x) && (self.min.y..=self.max.y).contains(&point.y)
+    }
+
+    pub(crate) fn include(&mut self, point: Point) {
+        self.min.x = self.min.x.min(point.x);
+        self.min.y = self.min.y.min(point.y);
+        self.max.x = self.max.x.max(point.x);
+        self.max.y = self.max.y.max(point.y);
+    }
+}
+
+impl Rectangle {
+    pub fn corners(&self) -> [Point; 4] {
+        let b = Bounds::from_corners(self.start, self.end);
+        [
+            b.min,
+            Point::new(b.max.x, b.min.y),
+            b.max,
+            Point::new(b.min.x, b.max.y),
+        ]
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.start.x == self.end.x || self.start.y == self.end.y || self.width <= 0.0
+    }
+}
+
+impl Annotation {
+    /// Translates geometry without changing style or clamping to the image.
+    pub fn translate(&mut self, offset: Point) {
+        let move_point = |p: &mut Point| {
+            p.x += offset.x;
+            p.y += offset.y;
+        };
+        match self {
+            Self::Stroke(stroke) => stroke.points.iter_mut().for_each(move_point),
+            Self::Text(text) => move_point(&mut text.origin),
+            Self::Arrow(arrow) => {
+                move_point(&mut arrow.tail);
+                move_point(&mut arrow.head);
+            }
+            Self::Rectangle(rectangle) => {
+                move_point(&mut rectangle.start);
+                move_point(&mut rectangle.end);
+            }
+        }
+    }
 }
 
 /// The editable state of one screenshot. `image` is never modified; edits
