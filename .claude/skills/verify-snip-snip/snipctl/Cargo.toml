@@ -1,0 +1,30 @@
+[package]
+name = "snipctl"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Not part of the product workspace at the repo root; this tool belongs to the
+# verify-snip-snip skill.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+arboard = "3.6"
+enigo = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+softbuffer = "0.4"
+sysinfo = "0.39"
+winit = "0.30"
+xcap = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5.4"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
