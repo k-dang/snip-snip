@@ -103,7 +103,6 @@ fn wheel_lines_per_notch() -> f32 {
         use windows::Win32::UI::WindowsAndMessaging::{SPI_GETWHEELSCROLLLINES, SystemParametersInfoW};
         let mut lines = 3u32;
         // SAFETY: SPI_GETWHEELSCROLLLINES only writes a u32 into this live, correctly sized buffer.
-        // The call reads system settings; it changes no state. Keep this FFI exception local.
         let read = unsafe {
             SystemParametersInfoW(
                 SPI_GETWHEELSCROLLLINES,

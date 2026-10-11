@@ -29,7 +29,13 @@ picked up.
    checks pass; Windows capture, crop editing, save, and clipboard readback
    were verified natively. macOS, native mixed-DPI checks, and clipboard paste
    into another app remain outstanding.
-7. **Save flow:** a default folder and a timestamped filename, plus copy and
-   close in one action.
+7. **Save flow (implemented):** a platform Pictures folder with a home
+   fallback, readable timestamped filenames and collision suffixes, plus
+   Copy & Close after clipboard success. Automated checks pass; Windows
+   picker defaults, cancellation, save, copy, native toolbar completion,
+   clipboard readback after closure, and another capture were verified.
+   Ctrl+Shift+C is reserved globally on the verification machine, so native
+   shortcut delivery remains outstanding, as do macOS and clipboard paste
+   into another app.
 8. **App shell:** a tray/menu-bar icon, launch at login, and a configurable
    hotkey.

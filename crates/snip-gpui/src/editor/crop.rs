@@ -168,9 +168,8 @@ impl Editor {
             )
             .when(enabled, |button| {
                 button.on_click(cx.listener(|this, _, window, cx| {
-                    if this.doc.crop.take().is_some() {
-                        this.history.commit(&this.doc);
-                    }
+                    this.doc.crop = None;
+                    this.history.commit(&this.doc);
                     this.update_cursor(window);
                     cx.notify();
                 }))
