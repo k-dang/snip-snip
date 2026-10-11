@@ -11,7 +11,6 @@ picked up.
    handles for arrow endpoints and rectangle corners, double-click to re-edit
    text. Shift constrains arrows to 45° steps and rectangles to squares.
    Automated checks pass; native Windows/macOS checks remain outstanding.
-   See [verification](../selection/VERIFICATION.md).
 3. **Style:** a palette of about five colors and three stroke widths, shared by
    all tools. Changing it also restyles the selected annotation.
 4. **Text:** multi-line text, a visible caret, and OS text input through GPUI's
