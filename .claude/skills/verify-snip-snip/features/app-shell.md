@@ -81,5 +81,7 @@ claim native proof of those failures or of icon disappearance/legibility.
   layout visibly disables the shortcut while New snip remains available,
   then switch back and verify recovery. Do not treat simulated layout events
   as proof of native Carbon key mapping.
-- Copy & Close integration is checked only after combining the Save flow and
-  App shell branches; this recipe does not claim to prove that integration.
+- `verify-shell` does not exercise Copy & Close. Follow [Export](export.md)
+  for that focused integration check; prove the shell survives completion and
+  another capture succeeds. A toolbar check does not prove delivery of the
+  globally reserved completion shortcut.

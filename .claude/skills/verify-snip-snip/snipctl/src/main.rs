@@ -37,6 +37,7 @@ snipctl <command> [args]
   shot NAME             save the editor window (or the primary screen) to <run>/NAME.png
   clipboard NAME        save the clipboard image to <run>/NAME.png
   save NAME             mod+s, enter <run>/NAME.png in the save dialog, wait for the file
+  cancel-save           open the native save dialog, cancel it, assert the editor stays open
   inspect NAME|PATH     print a PNG's size and fixture/ink color counts
   close                 Esc the editor (finishing text first if editing)
   cleanup               stop the app and fixture this run started; evidence stays
@@ -94,6 +95,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         "shot" => shot(name(rest)?),
         "clipboard" => clipboard(name(rest)?),
         "save" => save(name(rest)?),
+        "cancel-save" => cancel_save(),
         "inspect" => inspect(name(rest)?),
         "close" => close(),
         "cleanup" => cleanup(),
@@ -469,6 +471,17 @@ fn save(name: &str) -> Result<()> {
         Ok(fs::metadata(&path).is_ok_and(|m| m.len() > 0).then_some(()))
     })?;
     run.step(&format!("saved via dialog -> {}", path.display()))
+}
+
+fn cancel_save() -> Result<()> {
+    let run = run::current()?;
+    let pid = app(&run)?;
+    let mut input = Input::new()?;
+    focus_editor(&run, &mut input)?;
+    input.chord("mod+s")?;
+    platform::cancel_save(pid, &mut input)?;
+    screen::editor(pid).context("canceling the save dialog closed the editor")?;
+    run.step("canceled native save dialog; editor remains open")
 }
 
 fn inspect(name: &str) -> Result<()> {

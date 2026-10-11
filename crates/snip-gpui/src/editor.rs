@@ -3,13 +3,7 @@
 //! and exported image cannot drift apart. New ink, crop, caret, and selection
 //! controls are painted by GPUI on top.
 
-use std::{
-    borrow::Cow,
-    path::PathBuf,
-    rc::Rc,
-    sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
+use std::{rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
     App, Bounds, Context, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
@@ -28,6 +22,7 @@ use view::{CanvasView, Pan, ViewPreset, Viewport};
 use crate::{capture::to_render_image, drag};
 
 mod crop;
+mod export;
 mod navigation;
 mod text;
 mod view;
@@ -620,7 +615,7 @@ impl Editor {
             (true, "y") if cfg!(windows) && keystroke.modifiers.control => {
                 return self.restore_history(true, window, cx);
             }
-            (true, "c") => return self.copy(window, cx),
+            (true, "c") => return self.copy(keystroke.modifiers.shift, window, cx),
             (true, "s") => return self.save(window, cx),
             _ => {}
         }
@@ -690,47 +685,6 @@ impl Editor {
         let image = self.renderer.export(&self.doc);
         eprintln!("editor: export {:?}", started.elapsed());
         image
-    }
-
-    fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let image = self.export(window);
-        // GPUI's clipboard writes only PNG, which many apps can't paste;
-        // arboard also writes CF_DIBV5/CF_DIB on Windows.
-        let data = arboard::ImageData {
-            width: image.width() as usize,
-            height: image.height() as usize,
-            bytes: Cow::Owned(image.into_raw()),
-        };
-        self.status = match arboard::Clipboard::new().and_then(|mut c| c.set_image(data)) {
-            Ok(()) => "Copied to clipboard".into(),
-            Err(err) => format!("Copy failed: {err}").into(),
-        };
-        cx.notify();
-    }
-
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let image = self.export(window);
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let directory = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let chosen = cx.prompt_for_new_path(&directory, Some(&format!("snip-{stamp}.png")));
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(path))) = chosen.await else { return };
-            let written = cx
-                .background_executor()
-                .spawn(async move { std::fs::write(&path, snip_core::encode_png(&image)).map(|()| path) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.status = match written {
-                    Ok(path) => format!("Saved {}", path.display()).into(),
-                    Err(err) => format!("Save failed: {err}").into(),
-                };
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// What the canvas paints this frame, in image pixels.
@@ -849,6 +803,7 @@ impl Render for Editor {
                     )
                     .child(
                         div()
+                            .debug_selector(|| self.status.to_string())
                             .flex_1()
                             .min_w_0()
                             .truncate()
@@ -856,7 +811,10 @@ impl Render for Editor {
                             .child(self.status.clone()),
                     )
                     .child(action_button("Copy", cx, |this, window, cx| {
-                        this.copy(window, cx)
+                        this.copy(false, window, cx)
+                    }))
+                    .child(action_button("Copy & Close", cx, |this, window, cx| {
+                        this.copy(true, window, cx)
                     }))
                     .child(action_button("Save…", cx, |this, window, cx| {
                         this.save(window, cx)

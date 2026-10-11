@@ -15,7 +15,6 @@ use windows::Win32::{
 
 use crate::{input::Input, run::wait_for, screen};
 
-/// Screen units are physical pixels.
 pub const PHYSICAL_SCREEN_UNITS: bool = true;
 
 /// Makes every coordinate this process sees physical pixels, matching xcap.
@@ -178,21 +177,37 @@ pub fn clipboard_formats() -> Result<Vec<String>> {
         .collect())
 }
 
-/// Fills the save dialog that `mod+s` opened: the file-name box has focus
-/// with the suggested name selected, and accepts a full path.
+/// Finds the native save dialog belonging to this verification run.
+fn save_dialog(pid: u32) -> Result<xcap::Window> {
+    wait_for("the save dialog", Duration::from_secs(10), || {
+        Ok(screen::windows_of(pid)?.into_iter().find(|w| {
+            w.title().is_ok_and(|t| {
+                t != screen::EDITOR_TITLE && t != screen::OVERLAY_TITLE && t != "snip-snip Settings"
+            })
+        }))
+    })
+}
+
+/// Fills the focused file-name box, which accepts a full path.
 pub fn save_as(pid: u32, path: &Path, input: &mut Input) -> Result<()> {
-    let dialog = wait_for("the save dialog", Duration::from_secs(10), || {
-        Ok(screen::windows_of(pid)?
-            .into_iter()
-            // Any window that is not the editor or an overlay is the dialog.
-            .find(|w| {
-                w.title()
-                    .is_ok_and(|t| t != screen::EDITOR_TITLE && t != screen::OVERLAY_TITLE)
-            }))
-    })?;
+    let dialog = save_dialog(pid)?;
     focus(&dialog, pid, input)?;
     std::thread::sleep(Duration::from_millis(400));
     input.chord("ctrl+a")?;
     input.text(path.to_str().context("non-UTF-8 path")?)?;
     input.chord("enter")
+}
+
+/// Focus the modal dialog itself; focusing its editor can send Escape there.
+pub fn cancel_save(pid: u32, input: &mut Input) -> Result<()> {
+    let dialog = save_dialog(pid)?;
+    let dialog_id = dialog.id()?;
+    focus(&dialog, pid, input)?;
+    input.chord("esc")?;
+    wait_for("the save dialog to close", Duration::from_secs(5), || {
+        Ok((!screen::windows_of(pid)?
+            .iter()
+            .any(|window| window.id().ok() == Some(dialog_id)))
+        .then_some(()))
+    })
 }

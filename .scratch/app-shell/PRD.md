@@ -234,8 +234,11 @@ choices subject to the behavior and architecture above.
 - macOS native icon/menu, hotkey/layout changes, light/dark appearance, focus
   return, and resource cleanup remain unverified here. Shortcuts explicitly
   support ABC and U.S. layouts; other macOS layouts are rejected visibly.
-  Copy & Close followed by another capture remains a combined Save flow/App
-  shell check after the branches are integrated.
+  Combined Save flow toolbar Copy & Close, clipboard readback, and another
+  capture now pass on Windows (run `1791762848963`). The copied image was
+  600×300 with 90,000 blue and 90,000 green pixels; the shell remained running
+  with no windows after completion. Native Ctrl+Shift+C delivery remains
+  blocked by another app's global reservation; macOS integration is unverified.
 
 ## Comments
 
@@ -260,3 +263,12 @@ passed in 12.5 seconds with the expected fixture pixels and clean menu
 capture; an earlier failed run proved process/preference cleanup. Four
 focused helper tests, all-target Clippy, formatting, diff checks, and macOS
 cross-compilation pass. The command's native scenario remains Windows-only.
+
+Merged `main` (`181ac94`) into the App shell branch for PR #13. Roadmap and
+lockfile conflicts retain both implemented features and their dependencies;
+the shared app manifest has one `dirs` dependency. Windows save-dialog
+verification excludes Settings from the candidate windows. The merged
+release build, 86 workspace tests, four helper tests, Clippy, formatting,
+diff checks, and helper macOS cross-compilation pass. Native shell run
+`1791762836629` passed in 12.3 seconds; the combined toolbar completion check
+is recorded above.

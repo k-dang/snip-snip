@@ -11,6 +11,7 @@ const WHITE: Rgba<u8> = Rgba([255, 255, 255, 255]);
 const INK: Color = Color::rgb(0xE5, 0x48, 0x4D);
 
 fn editor(cx: &mut TestAppContext) -> VisualTestContext {
+    save_flow::install(cx);
     let window = cx.update(|cx| {
         super::open(RgbaImage::from_pixel(320, 200, WHITE), 1.0, cx);
         cx.windows()[0]
@@ -279,6 +280,7 @@ fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContex
             "100%",
             "zoom-level",
             "Copy",
+            "Copy & Close",
             "Save…",
         ] {
             let bounds = cx.debug_bounds(label).expect(label);
@@ -782,5 +784,6 @@ fn stationary_shift_changes_during_resize_still_commit_as_one_edit(cx: &mut Test
 }
 
 mod crop;
+mod save_flow;
 mod text;
 mod zoom;

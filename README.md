@@ -10,7 +10,9 @@ A fast screenshot and annotation tool written entirely in Rust, inspired by [Sho
   selection, moving, shape handles, shared colors and stroke widths, and undo/redo.
 - **Zoom and pan** with wheel or pinch zoom, Space+drag navigation, and Fit/100% controls.
 - **Copy** to the clipboard as PNG and DIB, so it pastes into most apps.
-- **Save** as a PNG at the original screenshot resolution.
+- **Copy & Close** to finish editing after a successful copy.
+- **Save** as a PNG at the original screenshot resolution, with a dedicated
+  screenshot folder and readable timestamped filename.
 - **What you see is what you export**: the editor preview is the same render that gets saved or copied.
 
 ## Getting started
@@ -73,8 +75,26 @@ layout restores shortcut registration when the chord is available.
 | Editor | `Ctrl/Cmd+Z` | Undo one completed edit |
 | Editor | `Ctrl/Cmd+Shift+Z` | Redo (`Ctrl+Y` also works on Windows) |
 | Editor | `Ctrl/Cmd+C` | Copy image |
+| Editor | `Ctrl/Cmd+Shift+C` | Copy image and close after clipboard success |
 | Editor | `Ctrl/Cmd+S` | Save as PNG |
 | Editor | `Esc` | Finish text, cancel a drag, clear selection, or close, in that order |
+
+Save opens the native file picker in `snip-snip` under your platform's Pictures
+folder, creating that subfolder on the first save. If Pictures cannot be
+located, it uses `snip-snip` under your home folder. The suggested filename
+uses local export time, for example `snip-2026-10-11_23-59-59-007.png`. Existing
+names receive a numeric suffix. You can choose a different name or destination
+in the picker; Save keeps the editor open and reports the saved path. Canceling
+the picker returns to editing. Folder, picker, and write failures appear in
+the status area and leave the document available for retry.
+
+Copy keeps the editor open. **Copy & Close** (or `Ctrl/Cmd+Shift+C`) closes only
+that editor after a successful clipboard write. Copy failures leave the
+editor open with an error. Both actions finish text and cancel unfinished
+drags before exporting, just like Save. The background app remains available
+for the next snip, and copied pixels remain available after the editor closes.
+If another application reserves the completion shortcut globally, use the
+Copy & Close toolbar control.
 
 New editors open in Fit, which shows the entire screenshot and follows window
 resizing. Wheel or pinch zoom chooses a manual view; resizing preserves its

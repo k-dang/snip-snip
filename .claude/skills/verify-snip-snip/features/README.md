@@ -12,6 +12,7 @@ The maintained source for verifying snip-snip's user-facing behavior. Read this 
 
 - Every action goes through `snipctl`; it logs each step to `<run>/steps.log`.
 - Image coordinates for `drag`/`click` are pixels of the snipped image, origin top-left.
+- A `click` outside those bounds can target the toolbar. Derive its coordinates from a current screenshot and `layout`, and record the action and resulting behavior; toolbar coordinates vary with wrapping.
 - Expected `inspect` counts in the recipes were measured on Windows at 100% scaling, where one screen unit is one image pixel. `snip` prints the image size it expects; on a 2x display, sizes double and counts quadruple.
 - Prefer keyboard shortcuts (`p a r t c`, `mod+…`) to toolbar clicks: the toolbar has no accessibility handles, so keys are the stable handle.
 - Run `snipctl cleanup` after the session, and after any failed step before retrying.
@@ -21,7 +22,7 @@ The maintained source for verifying snip-snip's user-facing behavior. Read this 
 - Pair each action with a `shot` of the resulting editor state.
 - Exported pixels are the ground truth: `clipboard` or `save`, then `inspect`, with expected counts stated first.
 - Name artifacts by feature ID (e.g. `annotate-rect`).
-- Report an entry point snipctl cannot reach (toolbar buttons, right-click) as skipped with the reason, never as verified through another path.
+- Report an entry point snipctl cannot reach as skipped with the reason, never as verified through another path. A toolbar click does not prove that its keyboard shortcut was delivered.
 
 ## Feature entry contract
 
@@ -34,4 +35,4 @@ Each feature file has an H1 title, one paragraph of user-visible behavior, then 
 - [Annotate](./annotate.md): pencil, arrow, rectangle, text.
 - [Crop](./crop.md): crop to a sub-rectangle, applied to exports.
 - [Undo and redo](./undo-redo.md): history across annotations and crop.
-- [Export](./export.md): copy to clipboard and save as PNG.
+- [Export](./export.md): copy, copy and close, save defaults, PNG export, and failure handling.
