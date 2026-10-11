@@ -16,6 +16,8 @@ path = "src/main.rs"
 snip-core.workspace = true
 anyhow.workspace = true
 arboard.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "6"
 futures.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true

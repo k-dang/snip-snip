@@ -7,9 +7,8 @@ use std::{path::Path, process::Command, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::{input::Input, screen};
+use crate::{input::Input, run::wait_for, screen};
 
-/// Screen units are points.
 pub const PHYSICAL_SCREEN_UNITS: bool = false;
 
 pub fn init() {}
@@ -58,15 +57,59 @@ pub fn clipboard_formats() -> Result<Vec<String>> {
     Ok(Vec::new())
 }
 
+#[derive(PartialEq, Eq)]
+enum SavePanelState {
+    Absent,
+    Unfocused,
+    Focused,
+}
+
+fn save_panel_state(pid: u32) -> Result<SavePanelState> {
+    // xcap reports app focus on macOS; use Accessibility to check the dialog.
+    let script = format!(
+        r#"tell application "System Events"
+    tell first application process whose unix id is {pid}
+        if (count of (windows whose subrole is "AXDialog")) is 0 then return "absent"
+        if not frontmost then return "unfocused"
+        set focusedWindow to value of attribute "AXFocusedWindow"
+        if subrole of focusedWindow is "AXDialog" then return "focused"
+        return "unfocused"
+    end tell
+end tell"#
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .context("inspecting the native save panel")?;
+    if !output.status.success() {
+        bail!(
+            "inspecting the native save panel: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    match String::from_utf8(output.stdout)?.trim() {
+        "absent" => Ok(SavePanelState::Absent),
+        "unfocused" => Ok(SavePanelState::Unfocused),
+        "focused" => Ok(SavePanelState::Focused),
+        state => bail!("unexpected native save panel state: {state}"),
+    }
+}
+
+fn wait_for_save_panel(pid: u32) -> Result<()> {
+    wait_for("the save panel to take focus", Duration::from_secs(10), || {
+        Ok((save_panel_state(pid)? == SavePanelState::Focused).then_some(()))
+    })
+}
+
 /// Fills the save panel that `mod+s` opened: type the file name into the
 /// focused name field, then use Go to Folder (Cmd+Shift+G) for the directory.
-pub fn save_as(_pid: u32, path: &Path, input: &mut Input) -> Result<()> {
+pub fn save_as(pid: u32, path: &Path, input: &mut Input) -> Result<()> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .context("bad file name")?;
     let dir = path.parent().and_then(Path::to_str).context("bad directory")?;
-    std::thread::sleep(Duration::from_millis(800));
+    wait_for_save_panel(pid)?;
     input.chord("cmd+a")?;
     input.text(name)?;
     input.chord("cmd+shift+g")?;
@@ -75,4 +118,13 @@ pub fn save_as(_pid: u32, path: &Path, input: &mut Input) -> Result<()> {
     input.chord("enter")?;
     std::thread::sleep(Duration::from_millis(500));
     input.chord("enter")
+}
+
+/// Send Escape only after the native save panel exists and has focus.
+pub fn cancel_save(pid: u32, input: &mut Input) -> Result<()> {
+    wait_for_save_panel(pid)?;
+    input.chord("esc")?;
+    wait_for("the save panel to close", Duration::from_secs(5), || {
+        Ok((save_panel_state(pid)? == SavePanelState::Absent).then_some(()))
+    })
 }
