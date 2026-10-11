@@ -6,7 +6,7 @@ A fast screenshot and annotation tool written entirely in Rust, inspired by [Sho
 
 - **Global shortcut** (`Alt+Shift+S`): freezes every monitor and opens a selection overlay.
 - **Editor** with a pencil, arrows, rectangle outlines, editable text, cropping,
-  and undo/redo.
+  selection, moving, shape handles, and undo/redo.
 - **Copy** to the clipboard as PNG and DIB, so it pastes into most apps.
 - **Save** as a PNG at the original screenshot resolution.
 - **What you see is what you export**: the editor preview is the same render that gets saved or copied.
@@ -36,16 +36,25 @@ macOS also asks for Screen Recording permission on the first snip.
 | Anywhere | `Alt+Shift+S` | Start a snip |
 | Overlay | Drag | Select a region and open it in the editor |
 | Overlay | `Esc` | Cancel |
+| Editor | `V` | Select (click an annotation; drag to move) |
 | Editor | `P` | Pencil |
 | Editor | `A` | Arrow (drag toward the tip) |
 | Editor | `R` | Rectangle outline |
 | Editor | `T` | Text (click to place; `Enter` or `Esc` to finish) |
 | Editor | `C` | Crop |
+| Editor | `Delete` / `Backspace` | Delete the selected annotation |
+| Editor | `Shift` while dragging | Arrows in 45° steps; square rectangles (drawing or handles) |
+| Editor | Double-click text in Select | Re-edit the label |
 | Editor | `Ctrl/Cmd+Z` | Undo one completed edit |
 | Editor | `Ctrl/Cmd+Shift+Z` | Redo (`Ctrl+Y` also works on Windows) |
 | Editor | `Ctrl/Cmd+C` | Copy image |
 | Editor | `Ctrl/Cmd+S` | Save as PNG |
-| Editor | `Esc` | Finish text or cancel a drag; otherwise close |
+| Editor | `Esc` | Finish text, cancel a drag, clear selection, or close, in that order |
+
+Select edits one annotation at a time. Arrows have handles at both endpoints;
+rectangles have handles at their four corners. Click empty canvas to deselect.
+Each completed move, resize, deletion, or text edit undoes in one step.
+Selection outlines and handles never appear in copied or saved images.
 
 ## Project layout
 
