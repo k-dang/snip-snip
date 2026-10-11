@@ -23,8 +23,12 @@ picked up.
    to pan, and 100% and fit shortcuts and toolbar controls. Cursor-anchored
    zoom, bounded panning, and DPI-aware views preserve editing and exports.
    Automated checks pass; native Windows/macOS checks remain outstanding.
-6. **Crop polish:** handles to adjust the crop, a way to clear it, and the
-   pixel size shown while dragging.
+6. **Crop polish (implemented):** four corner handles to adjust the crop,
+   Clear crop, and image-pixel dimensions shown while dragging. Creation,
+   adjustment, replacement, and clearing each undo in one step. Automated
+   checks pass; Windows capture, crop editing, save, and clipboard readback
+   were verified natively. macOS, native mixed-DPI checks, and clipboard paste
+   into another app remain outstanding.
 7. **Save flow:** a default folder and a timestamped filename, plus copy and
    close in one action.
 8. **App shell:** a tray/menu-bar icon, launch at login, and a configurable

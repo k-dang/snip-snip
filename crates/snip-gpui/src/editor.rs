@@ -21,11 +21,13 @@ use snip_core::{
     Annotation, Arrow, Color, Document, History, Point, Rect, Rectangle, Renderer, RgbaImage, Stroke, Text,
 };
 
+use crop::CropGesture;
 use text::{TextOverlay, TextSession};
 use view::{CanvasView, Pan, ViewPreset, Viewport};
 
 use crate::{capture::to_render_image, drag};
 
+mod crop;
 mod navigation;
 mod text;
 mod view;
@@ -105,10 +107,7 @@ enum Tool {
 enum Gesture {
     Pan(Pan),
     Annotation(Annotation),
-    Crop {
-        start: Point,
-        previous: Option<Rect>,
-    },
+    Crop(CropGesture),
     Edit {
         index: usize,
         original: Annotation,
@@ -350,11 +349,7 @@ impl Editor {
                     width: ink_width,
                 })))
             }
-            Tool::Crop if inside => {
-                let previous = self.doc.crop;
-                self.doc.crop = None;
-                self.gesture = Some(Gesture::Crop { start: p, previous });
-            }
+            Tool::Crop => self.begin_crop(p, viewport.scale, inside),
             Tool::Text if inside => {
                 let index = self.text_at(p).unwrap_or_else(|| {
                     self.doc.annotations.push(Annotation::Text(Text {
@@ -480,13 +475,9 @@ impl Editor {
                     self.rerender(window);
                 }
             }
-            Some(Gesture::Crop { start, .. }) => {
-                let (width, height) = self.doc.image.dimensions();
-                self.doc.crop = if start.x == p.x || start.y == p.y {
-                    None
-                } else {
-                    Rect::from_corners(*start, p, width, height)
-                };
+            Some(Gesture::Crop(gesture)) => {
+                let scale = self.viewport.get().map_or(1.0, |v| v.scale);
+                self.doc.crop = gesture.update(p, self.doc.image.dimensions(), scale);
             }
             _ => {}
         }
@@ -505,9 +496,9 @@ impl Editor {
                     self.rerender(window);
                 }
             }
-            Some(Gesture::Crop { previous, .. }) => {
+            Some(Gesture::Crop(gesture)) => {
                 if self.doc.crop.is_none() {
-                    self.doc.crop = previous;
+                    self.doc.crop = gesture.previous();
                 }
                 self.history.commit(&self.doc);
             }
@@ -529,7 +520,7 @@ impl Editor {
     fn cancel_gesture(&mut self, window: &mut Window) {
         match self.gesture.take() {
             Some(Gesture::Pan(pan)) => self.viewport.cancel_pan(pan),
-            Some(Gesture::Crop { previous, .. }) => self.doc.crop = previous,
+            Some(Gesture::Crop(gesture)) => self.doc.crop = gesture.previous(),
             Some(Gesture::Edit { index, original, .. }) if self.doc.annotations[index] != original => {
                 self.doc.annotations[index] = original;
                 self.rerender(window);
@@ -559,6 +550,8 @@ impl Editor {
             CursorStyle::ClosedHand
         } else if self.space_held && self.gesture.is_none() {
             CursorStyle::OpenHand
+        } else if self.tool == Tool::Crop {
+            self.crop_cursor(window)
         } else if self.tool != Tool::Select {
             CursorStyle::Crosshair
         } else if let Some(viewport) = self.viewport.get() {
@@ -681,9 +674,9 @@ impl Editor {
                     self.doc.annotations.remove(index);
                     self.history.commit(&self.doc);
                     self.rerender(window);
-                    self.update_cursor(window);
-                    cx.notify();
                 }
+                self.update_cursor(window);
+                cx.notify();
             }
             _ => {}
         }
@@ -760,6 +753,7 @@ impl Editor {
         CanvasOverlay {
             live_annotation,
             crop: self.doc.crop,
+            crop_handles: self.tool == Tool::Crop,
             text,
             selection,
         }
@@ -769,6 +763,7 @@ impl Editor {
 struct CanvasOverlay {
     live_annotation: Option<Annotation>,
     crop: Option<Rect>,
+    crop_handles: bool,
     text: Option<TextOverlay>,
     selection: Option<SelectionOverlay>,
 }
@@ -783,6 +778,12 @@ impl Render for Editor {
         let preview = self.preview.clone();
         let image_size = self.doc.image.dimensions();
         let viewport_cell = self.viewport.clone();
+        let layout_viewport = self.viewport.clone();
+        let crop_dimensions = if matches!(self.gesture, Some(Gesture::Crop(_))) {
+            self.doc.crop
+        } else {
+            None
+        };
         let overlay = self.overlay();
         let device_scale = window.scale_factor();
         let this = cx.entity();
@@ -831,6 +832,9 @@ impl Render for Editor {
                     .child(self.tool_button("Rectangle", "R", Tool::Rectangle, cx))
                     .child(self.tool_button("Text", "T", Tool::Text, cx))
                     .child(self.tool_button("Crop", "C", Tool::Crop, cx))
+                    .when(self.tool == Tool::Crop, |toolbar| {
+                        toolbar.child(self.clear_crop_button(cx))
+                    })
                     .child(self.color_controls(window, cx))
                     .child(self.width_controls(window, cx))
                     .child(self.view_button("Fit", ViewPreset::Fit, "0", cx))
@@ -874,8 +878,16 @@ impl Render for Editor {
                     )
                     .child(
                         canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, cx| {
+                            move |bounds, window, cx| {
+                                let viewport = layout_viewport.resolve(bounds, image_size, device_scale);
+                                let dimensions = viewport.and_then(|viewport| {
+                                    crop_dimensions.map(|crop| {
+                                        crop::prepaint_dimensions(crop, viewport, bounds, window, cx)
+                                    })
+                                });
+                                (viewport, dimensions)
+                            },
+                            move |bounds, (viewport, dimensions), window, cx| {
                                 if editing {
                                     window.handle_input(
                                         &focus,
@@ -884,10 +896,11 @@ impl Render for Editor {
                                     );
                                 }
                                 drag::track(window, this.clone(), Self::on_mouse_move, Self::on_mouse_up);
-                                if let Some(viewport) =
-                                    viewport_cell.resolve(bounds, image_size, device_scale)
-                                {
+                                if let Some(viewport) = viewport {
                                     paint_canvas(window, viewport, image_size, preview, overlay);
+                                    if let Some(mut dimensions) = dimensions {
+                                        dimensions.paint(window, cx);
+                                    }
                                     let view_changed = viewport_cell.record_paint(viewport);
                                     if editing && view_changed {
                                         window.invalidate_character_coordinates();
@@ -1143,6 +1156,11 @@ fn paint_canvas(
             }
         }
         window.paint_quad(outline(hole, hsla(0., 0., 1., 0.9), Default::default()));
+        if overlay.crop_handles {
+            for (position, _) in crop::crop_handles(crop) {
+                paint_handle(window, viewport.to_window(position));
+            }
+        }
     }
 
     if let Some(selection) = overlay.selection {
@@ -1158,20 +1176,23 @@ fn paint_canvas(
         ));
         window.paint_quad(outline(bounds, hsla(0.58, 0.9, 0.65, 1.), Default::default()));
         for position in selection.handles {
-            let center = viewport.to_window(position);
-            let handle = Bounds::new(
-                center - point(px(HANDLE_SIZE / 2.), px(HANDLE_SIZE / 2.)),
-                size(px(HANDLE_SIZE), px(HANDLE_SIZE)),
-            );
-            window.paint_quad(outline(
-                handle.dilate(px(1.)),
-                hsla(0., 0., 0., 0.85),
-                Default::default(),
-            ));
-            window.paint_quad(fill(handle, hsla(0., 0., 1., 1.)));
-            window.paint_quad(outline(handle, hsla(0.58, 0.9, 0.45, 1.), Default::default()));
+            paint_handle(window, viewport.to_window(position));
         }
     }
+}
+
+fn paint_handle(window: &mut Window, center: gpui::Point<gpui::Pixels>) {
+    let handle = Bounds::new(
+        center - point(px(HANDLE_SIZE / 2.), px(HANDLE_SIZE / 2.)),
+        size(px(HANDLE_SIZE), px(HANDLE_SIZE)),
+    );
+    window.paint_quad(outline(
+        handle.dilate(px(1.)),
+        hsla(0., 0., 0., 0.85),
+        Default::default(),
+    ));
+    window.paint_quad(fill(handle, hsla(0., 0., 1., 1.)));
+    window.paint_quad(outline(handle, hsla(0.58, 0.9, 0.45, 1.), Default::default()));
 }
 
 /// The stroke being drawn, painted by GPUI until mouse-up commits it to the

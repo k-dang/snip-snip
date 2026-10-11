@@ -115,7 +115,6 @@ impl Renderer {
     /// Finds the last-painted annotation under `point`, ignoring the crop.
     /// `tolerance` is nonnegative image-pixel slop, supplied by the caller.
     pub fn annotation_at(&mut self, doc: &Document, point: Point, tolerance: f32) -> Option<usize> {
-        let tolerance = tolerance.max(0.0);
         doc.annotations.iter().rposition(|annotation| match annotation {
             Annotation::Stroke(stroke) => {
                 if stroke.width <= 0.0 {
