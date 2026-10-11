@@ -29,9 +29,16 @@ use crate::{capture::to_render_image, drag};
 mod tests;
 
 const INK: Color = Color::rgb(0xE5, 0x48, 0x4D);
-/// Pencil width and text size in logical pixels; converted to image pixels
-/// with the editor window's scale factor when the annotation is created.
-const PENCIL_WIDTH: f32 = 3.0;
+const PALETTE: [(&str, Color); 5] = [
+    ("Red", INK),
+    ("Yellow", Color::rgb(0xF5, 0xD9, 0x0A)),
+    ("Green", Color::rgb(0x30, 0xA4, 0x6C)),
+    ("Blue", Color::rgb(0x00, 0x90, 0xFF)),
+    ("Black", Color::rgb(0x00, 0x00, 0x00)),
+];
+const WIDTHS: [(&str, f32); 3] = [("Thin", 1.0), ("Medium", 3.0), ("Thick", 6.0)];
+/// Text size in logical pixels; converted to image pixels with the editor
+/// window's scale factor when the annotation is created.
 const TEXT_SIZE: f32 = 20.0;
 /// Ignore accidental arrow clicks/jitter, measured at screenshot resolution.
 const MIN_ARROW_LENGTH: f32 = 3.0;
@@ -201,6 +208,10 @@ struct Editor {
     /// `renderer.composite(&doc)` as a texture; refreshed by `rerender`.
     preview: Arc<RenderImage>,
     tool: Tool,
+    /// Shared drawing defaults, independent of selection and document history.
+    ink_color: Color,
+    /// Logical pixels; annotations store widths converted to image pixels.
+    ink_width: f32,
     selected: Option<usize>,
     cursor: CursorStyle,
     gesture: Option<Gesture>,
@@ -230,6 +241,8 @@ impl Editor {
             doc,
             renderer: Renderer::new(),
             tool: Tool::Pencil,
+            ink_color: INK,
+            ink_width: 3.0,
             selected: None,
             cursor: CursorStyle::Crosshair,
             gesture: None,
@@ -278,7 +291,10 @@ impl Editor {
         let inside = (0.0..width as f32).contains(&p.x) && (0.0..height as f32).contains(&p.y);
         self.cancel_gesture(window);
         self.finish_text(window);
-        let ink_width = PENCIL_WIDTH * window.scale_factor();
+        if self.tool != Tool::Select {
+            self.selected = None;
+        }
+        let ink_width = self.ink_width * window.scale_factor();
         match self.tool {
             Tool::Select => {
                 if let Some((position, handle)) = self.handle_at(p, viewport.scale) {
@@ -317,7 +333,7 @@ impl Editor {
             Tool::Pencil if inside => {
                 self.gesture = Some(Gesture::Annotation(Annotation::Stroke(Stroke {
                     points: vec![p],
-                    color: INK,
+                    color: self.ink_color,
                     width: ink_width,
                 })))
             }
@@ -325,7 +341,7 @@ impl Editor {
                 self.gesture = Some(Gesture::Annotation(Annotation::Arrow(Arrow {
                     tail: p,
                     head: p,
-                    color: INK,
+                    color: self.ink_color,
                     width: ink_width,
                 })))
             }
@@ -333,7 +349,7 @@ impl Editor {
                 self.gesture = Some(Gesture::Annotation(Annotation::Rectangle(Rectangle {
                     start: p,
                     end: p,
-                    color: INK,
+                    color: self.ink_color,
                     width: ink_width,
                 })))
             }
@@ -348,7 +364,7 @@ impl Editor {
                         origin: p,
                         content: String::new(),
                         size: TEXT_SIZE * window.scale_factor(),
-                        color: INK,
+                        color: self.ink_color,
                     }));
                     self.doc.annotations.len() - 1
                 }));
@@ -830,6 +846,8 @@ impl Render for Editor {
                     .child(self.tool_button("Rectangle", "R", Tool::Rectangle, cx))
                     .child(self.tool_button("Text", "T", Tool::Text, cx))
                     .child(self.tool_button("Crop", "C", Tool::Crop, cx))
+                    .child(self.color_controls(window, cx))
+                    .child(self.width_controls(window, cx))
                     .child(
                         div()
                             .flex_1()
@@ -874,6 +892,139 @@ impl Render for Editor {
 }
 
 impl Editor {
+    /// Selection displays its own style without replacing drawing defaults.
+    fn displayed_style(&self, window: &Window) -> (Color, Option<f32>) {
+        let annotation = self
+            .editing
+            .or(self.selected)
+            .and_then(|i| self.doc.annotations.get(i));
+        match annotation {
+            Some(Annotation::Stroke(a)) => (a.color, Some(a.width / window.scale_factor())),
+            Some(Annotation::Arrow(a)) => (a.color, Some(a.width / window.scale_factor())),
+            Some(Annotation::Rectangle(a)) => (a.color, Some(a.width / window.scale_factor())),
+            Some(Annotation::Text(a)) => (a.color, None),
+            None => (
+                self.ink_color,
+                (self.tool != Tool::Text).then_some(self.ink_width),
+            ),
+        }
+    }
+
+    /// Resolve unfinished input before a toolbar release can commit a restyle.
+    fn prepare_style_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_gesture(window);
+        let label = self
+            .editing
+            .filter(|&i| matches!(&self.doc.annotations[i], Annotation::Text(t) if !t.content.is_empty()));
+        self.finish_text(window);
+        if label.is_some() {
+            self.selected = label;
+        }
+        window.focus(&self.focus, cx);
+        self.update_cursor(window);
+        cx.notify();
+    }
+
+    fn set_color(&mut self, color: Color, window: &mut Window, cx: &mut Context<Self>) {
+        self.ink_color = color;
+        if let Some(annotation) = self.selected.and_then(|i| self.doc.annotations.get_mut(i)) {
+            let current = match annotation {
+                Annotation::Stroke(a) => &mut a.color,
+                Annotation::Arrow(a) => &mut a.color,
+                Annotation::Rectangle(a) => &mut a.color,
+                Annotation::Text(a) => &mut a.color,
+            };
+            if *current != color {
+                *current = color;
+                self.history.commit(&self.doc);
+                self.rerender(window);
+            }
+        }
+        cx.notify();
+    }
+
+    fn set_width(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.ink_width = width;
+        if let Some(annotation) = self.selected.and_then(|i| self.doc.annotations.get_mut(i)) {
+            let current = match annotation {
+                Annotation::Stroke(a) => &mut a.width,
+                Annotation::Arrow(a) => &mut a.width,
+                Annotation::Rectangle(a) => &mut a.width,
+                Annotation::Text(_) => return,
+            };
+            let image_width = width * window.scale_factor();
+            if *current != image_width {
+                *current = image_width;
+                self.history.commit(&self.doc);
+                self.rerender(window);
+            }
+        }
+        cx.notify();
+    }
+
+    fn color_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (active, _) = self.displayed_style(window);
+        div()
+            .flex()
+            .gap_1()
+            .flex_shrink_0()
+            .children(PALETTE.map(|(label, color)| {
+                button(label)
+                    .when(active == color, |b| {
+                        b.bg(rgb(0x3A3A3F)).border_color(rgb(0xAAAAAF))
+                    })
+                    .child(
+                        div()
+                            .size(px(12.))
+                            .rounded_full()
+                            .bg(to_hsla(color))
+                            .border_1()
+                            .border_color(rgb(0x77777D)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.prepare_style_change(window, cx);
+                        }),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_color(color, window, cx);
+                    }))
+            }))
+    }
+
+    fn width_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (_, active) = self.displayed_style(window);
+        let enabled = active.is_some();
+        div()
+            .flex()
+            .gap_1()
+            .flex_shrink_0()
+            .children(WIDTHS.map(|(label, width)| {
+                button(label)
+                    .when(active.is_some_and(|a| (a - width).abs() < 0.001), |b| {
+                        b.bg(rgb(0x3A3A3F)).border_color(rgb(0xAAAAAF))
+                    })
+                    .child(div().w(px(16.)).h(px(width)).rounded_full().bg(rgb(0xE6E6E6)))
+                    .when(!enabled, |b| b.opacity(0.4))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            if enabled {
+                                this.prepare_style_change(window, cx);
+                            }
+                        }),
+                    )
+                    .when(enabled, |b| {
+                        b.on_click(cx.listener(move |this, _, window, cx| {
+                            this.set_width(width, window, cx);
+                        }))
+                    })
+            }))
+    }
+
     fn tool_button(
         &self,
         label: &'static str,
@@ -902,6 +1053,7 @@ fn button(label: &'static str) -> gpui::Stateful<gpui::Div> {
         .id(label)
         .debug_selector(|| label.into())
         .h(px(28.))
+        .flex_shrink_0()
         .px_2p5()
         .flex()
         .items_center()
@@ -1022,9 +1174,10 @@ fn paint_canvas(
 }
 
 /// The stroke being drawn, painted by GPUI until mouse-up commits it to the
-/// document. `width` is in image pixels, like the committed stroke's.
-fn paint_live_stroke(window: &mut Window, viewport: Viewport, points: &[Point], width: f32) {
-    let width = px(width * viewport.scale);
+/// document. Its width is in image pixels, like the committed stroke's.
+fn paint_live_stroke(window: &mut Window, viewport: Viewport, stroke: &Stroke) {
+    let points = &stroke.points;
+    let width = px(stroke.width * viewport.scale);
     let mut path = PathBuilder::stroke(width);
     path.move_to(viewport.to_window(points[0]));
     for p in &points[1..] {
@@ -1035,7 +1188,7 @@ fn paint_live_stroke(window: &mut Window, viewport: Viewport, points: &[Point], 
         path.line_to(viewport.to_window(points[0]) + point(px(0.01), px(0.)));
     }
     if let Ok(path) = path.build() {
-        window.paint_path(path, to_hsla(INK));
+        window.paint_path(path, to_hsla(stroke.color));
     }
 }
 
@@ -1043,7 +1196,7 @@ fn paint_live_stroke(window: &mut Window, viewport: Viewport, points: &[Point], 
 /// The committed preview and all exports use the core rasterizer itself.
 fn paint_live_annotation(window: &mut Window, viewport: Viewport, annotation: &Annotation) {
     match annotation {
-        Annotation::Stroke(stroke) => paint_live_stroke(window, viewport, &stroke.points, stroke.width),
+        Annotation::Stroke(stroke) => paint_live_stroke(window, viewport, stroke),
         Annotation::Arrow(arrow) => {
             let Some(geometry) = arrow.geometry() else { return };
             let mut shaft = PathBuilder::stroke(px(arrow.width * viewport.scale));
