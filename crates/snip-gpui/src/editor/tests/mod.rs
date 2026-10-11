@@ -273,6 +273,9 @@ fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContex
             "Thin",
             "Medium",
             "Thick",
+            "Fit",
+            "100%",
+            "zoom-level",
             "Copy",
             "Save…",
         ] {
@@ -777,3 +780,4 @@ fn stationary_shift_changes_during_resize_still_commit_as_one_edit(cx: &mut Test
 }
 
 mod text;
+mod zoom;

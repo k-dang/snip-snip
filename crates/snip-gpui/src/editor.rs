@@ -5,7 +5,6 @@
 
 use std::{
     borrow::Cow,
-    cell::Cell,
     path::PathBuf,
     rc::Rc,
     sync::Arc,
@@ -14,19 +13,22 @@ use std::{
 
 use gpui::{
     App, Bounds, Context, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
-    Render, RenderImage, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div,
-    fill, hsla, outline, point, prelude::*, px, rgb, size,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Render,
+    RenderImage, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, hsla,
+    outline, point, prelude::*, px, rgb, size,
 };
 use snip_core::{
     Annotation, Arrow, Color, Document, History, Point, Rect, Rectangle, Renderer, RgbaImage, Stroke, Text,
 };
 
 use text::{TextOverlay, TextSession};
+use view::{CanvasView, Pan, ViewPreset, Viewport};
 
 use crate::{capture::to_render_image, drag};
 
+mod navigation;
 mod text;
+mod view;
 // GPUI's rendered-element selectors are only available in debug builds.
 #[cfg(all(test, debug_assertions))]
 mod tests;
@@ -99,8 +101,9 @@ enum Tool {
     Crop,
 }
 
-/// A pointer gesture in progress, in image pixels.
+/// An annotation gesture in image pixels, or navigation in window coordinates.
 enum Gesture {
+    Pan(Pan),
     Annotation(Annotation),
     Crop {
         start: Point,
@@ -175,35 +178,6 @@ fn valid_annotation(annotation: &Annotation) -> bool {
     }
 }
 
-/// Where the image is drawn inside the window, recorded during paint so
-/// pointer events can be mapped back to image pixels.
-#[derive(Clone, Copy)]
-struct Viewport {
-    origin: gpui::Point<Pixels>,
-    /// Logical pixels per image pixel.
-    scale: f32,
-}
-
-impl Viewport {
-    fn to_image(self, p: gpui::Point<Pixels>) -> Point {
-        Point::new(
-            f32::from(p.x - self.origin.x) / self.scale,
-            f32::from(p.y - self.origin.y) / self.scale,
-        )
-    }
-
-    fn to_window(self, p: Point) -> gpui::Point<Pixels> {
-        self.origin + point(px(p.x * self.scale), px(p.y * self.scale))
-    }
-
-    fn rect_to_window(self, r: Rect) -> Bounds<Pixels> {
-        Bounds::from_corners(
-            self.to_window(Point::new(r.x as f32, r.y as f32)),
-            self.to_window(Point::new((r.x + r.width) as f32, (r.y + r.height) as f32)),
-        )
-    }
-}
-
 struct Editor {
     doc: Document,
     history: History,
@@ -218,8 +192,9 @@ struct Editor {
     selected: Option<usize>,
     cursor: CursorStyle,
     gesture: Option<Gesture>,
+    space_held: bool,
     editing: Option<TextSession>,
-    viewport: Rc<Cell<Option<Viewport>>>,
+    viewport: Rc<CanvasView>,
     focus: FocusHandle,
     status: SharedString,
 }
@@ -235,6 +210,12 @@ impl Editor {
             window.remove_window();
             false
         });
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                this.release_space(window, cx);
+            }
+        })
+        .detach();
         let status = format!("{} × {} px", image.width(), image.height()).into();
         let doc = Document::new(image);
         Self {
@@ -248,6 +229,7 @@ impl Editor {
             selected: None,
             cursor: CursorStyle::Crosshair,
             gesture: None,
+            space_held: false,
             editing: None,
             viewport: Rc::default(),
             focus,
@@ -288,6 +270,12 @@ impl Editor {
             return;
         };
         window.focus(&self.focus, cx);
+        if self.space_held && self.editing.is_none() && self.gesture.is_none() {
+            self.gesture = self.viewport.begin_pan(event.position).map(Gesture::Pan);
+            self.update_cursor(window);
+            cx.stop_propagation();
+            return cx.notify();
+        }
         let p = viewport.to_image(event.position);
         let (width, height) = self.doc.image.dimensions();
         let inside = (0.0..width as f32).contains(&p.x) && (0.0..height as f32).contains(&p.y);
@@ -390,7 +378,11 @@ impl Editor {
             return;
         };
         let p = viewport.to_image(event.position);
-        self.update_gesture(p, event.modifiers.shift, window);
+        if let Some(Gesture::Pan(pan)) = &self.gesture {
+            self.viewport.pan(pan, event.position);
+        } else {
+            self.update_gesture(p, event.modifiers.shift, window);
+        }
         let cursor_changed = self.update_cursor(window);
         if self.gesture.is_some() || cursor_changed {
             cx.notify();
@@ -505,6 +497,7 @@ impl Editor {
             self.update_gesture(viewport.to_image(event.position), event.modifiers.shift, window);
         }
         match self.gesture.take() {
+            Some(Gesture::Pan(pan)) => self.viewport.pan(&pan, event.position),
             Some(Gesture::Annotation(annotation)) => {
                 if valid_annotation(&annotation) {
                     self.doc.annotations.push(annotation);
@@ -535,6 +528,7 @@ impl Editor {
     /// Live geometry/crop changes are restored without touching history.
     fn cancel_gesture(&mut self, window: &mut Window) {
         match self.gesture.take() {
+            Some(Gesture::Pan(pan)) => self.viewport.cancel_pan(pan),
             Some(Gesture::Crop { previous, .. }) => self.doc.crop = previous,
             Some(Gesture::Edit { index, original, .. }) if self.doc.annotations[index] != original => {
                 self.doc.annotations[index] = original;
@@ -561,6 +555,10 @@ impl Editor {
     fn update_cursor(&mut self, window: &Window) -> bool {
         let cursor = if self.editing.is_some() {
             CursorStyle::IBeam
+        } else if matches!(self.gesture, Some(Gesture::Pan(_))) {
+            CursorStyle::ClosedHand
+        } else if self.space_held && self.gesture.is_none() {
+            CursorStyle::OpenHand
         } else if self.tool != Tool::Select {
             CursorStyle::Crosshair
         } else if let Some(viewport) = self.viewport.get() {
@@ -623,6 +621,8 @@ impl Editor {
         let keystroke = &event.keystroke;
         let shortcut = keystroke.modifiers.secondary();
         match (shortcut, keystroke.key.as_str()) {
+            (true, "0") => return self.set_view(ViewPreset::Fit, window, cx),
+            (true, "1") => return self.set_view(ViewPreset::ActualSize, window, cx),
             (true, "z") => return self.restore_history(keystroke.modifiers.shift, window, cx),
             (true, "y") if cfg!(windows) && keystroke.modifiers.control => {
                 return self.restore_history(true, window, cx);
@@ -639,6 +639,13 @@ impl Editor {
                 cx.notify();
             }
             return;
+        }
+
+        if keystroke.key == "space" && keystroke.modifiers == gpui::Modifiers::none() {
+            self.space_held = true;
+            self.update_cursor(window);
+            cx.stop_propagation();
+            return cx.notify();
         }
 
         if keystroke.key != "escape"
@@ -781,6 +788,8 @@ impl Render for Editor {
         let this = cx.entity();
         let editing = self.editing.is_some();
         let focus = self.focus.clone();
+        let zoom_label = self.viewport.zoom_label();
+        let painted_zoom_label = zoom_label.clone();
 
         div()
             .size_full()
@@ -791,6 +800,7 @@ impl Render for Editor {
             .text_sm()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, window, cx| this.on_key_down(event, window, cx)))
+            .on_key_up(cx.listener(Self::on_key_up))
             .on_modifiers_changed(
                 cx.listener(|this, event, window, cx| this.on_modifiers_changed(event, window, cx)),
             )
@@ -823,6 +833,16 @@ impl Render for Editor {
                     .child(self.tool_button("Crop", "C", Tool::Crop, cx))
                     .child(self.color_controls(window, cx))
                     .child(self.width_controls(window, cx))
+                    .child(self.view_button("Fit", ViewPreset::Fit, "0", cx))
+                    .child(self.view_button("100%", ViewPreset::ActualSize, "1", cx))
+                    .child(
+                        div()
+                            .debug_selector(|| "zoom-level".into())
+                            .w(px(54.))
+                            .flex_shrink_0()
+                            .text_color(rgb(0x9A9AA0))
+                            .child(zoom_label),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -846,6 +866,8 @@ impl Render for Editor {
                     .w_full()
                     .overflow_hidden()
                     .cursor(self.cursor)
+                    .on_scroll_wheel(cx.listener(Self::on_scroll))
+                    .on_pinch(cx.listener(Self::on_pinch))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event, window, cx| this.on_mouse_down(event, window, cx)),
@@ -861,10 +883,19 @@ impl Render for Editor {
                                         cx,
                                     );
                                 }
-                                drag::track(window, this, Self::on_mouse_move, Self::on_mouse_up);
-                                let viewport = fit(bounds, image_size, device_scale);
-                                viewport_cell.set(Some(viewport));
-                                paint_canvas(window, viewport, image_size, preview, overlay);
+                                drag::track(window, this.clone(), Self::on_mouse_move, Self::on_mouse_up);
+                                if let Some(viewport) =
+                                    viewport_cell.resolve(bounds, image_size, device_scale)
+                                {
+                                    paint_canvas(window, viewport, image_size, preview, overlay);
+                                    let view_changed = viewport_cell.record_paint(viewport);
+                                    if editing && view_changed {
+                                        window.invalidate_character_coordinates();
+                                    }
+                                    if viewport_cell.zoom_label() != painted_zoom_label {
+                                        this.update(cx, |_, cx| cx.notify());
+                                    }
+                                }
                             },
                         )
                         .size_full(),
@@ -1041,26 +1072,6 @@ fn button(label: &'static str) -> gpui::Stateful<gpui::Div> {
         .border_color(gpui::transparent_black())
         .hover(|s| s.bg(rgb(0x2C2C30)))
         .child(label)
-}
-
-/// Fits the image inside `bounds` with padding, centered, never larger than
-/// one image pixel per device pixel.
-fn fit(bounds: Bounds<Pixels>, (w, h): (u32, u32), device_scale: f32) -> Viewport {
-    let avail_w = f32::from(bounds.size.width) - 2.0 * CANVAS_PADDING;
-    let avail_h = f32::from(bounds.size.height) - 2.0 * CANVAS_PADDING;
-    let scale = (avail_w / w as f32)
-        .min(avail_h / h as f32)
-        .min(1.0 / device_scale)
-        .max(0.01);
-    let shown = size(px(w as f32 * scale), px(h as f32 * scale));
-    Viewport {
-        origin: bounds.origin
-            + point(
-                (bounds.size.width - shown.width) / 2.,
-                (bounds.size.height - shown.height) / 2.,
-            ),
-        scale,
-    }
 }
 
 fn paint_canvas(

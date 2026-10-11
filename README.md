@@ -7,6 +7,7 @@ A fast screenshot and annotation tool written entirely in Rust, inspired by [Sho
 - **Global shortcut** (`Alt+Shift+S`): freezes every monitor and opens a selection overlay.
 - **Editor** with a pencil, arrows, rectangle outlines, editable text, cropping,
   selection, moving, shape handles, shared colors and stroke widths, and undo/redo.
+- **Zoom and pan** with wheel or pinch zoom, Space+drag navigation, and Fit/100% controls.
 - **Copy** to the clipboard as PNG and DIB, so it pastes into most apps.
 - **Save** as a PNG at the original screenshot resolution.
 - **What you see is what you export**: the editor preview is the same render that gets saved or copied.
@@ -42,6 +43,10 @@ macOS also asks for Screen Recording permission on the first snip.
 | Editor | `R` | Rectangle outline |
 | Editor | `T` | Text (click to place or re-edit; `Enter` for a new line; `Esc` or click away to finish) |
 | Editor | `C` | Crop |
+| Editor | `Ctrl+scroll` (Windows) / `Cmd+scroll` (macOS), or pinch | Zoom around the pointer or pinch center |
+| Editor | Hold `Space` + left-drag | Pan temporarily; release Space or the mouse button to finish |
+| Editor | `Ctrl/Cmd+0` | Fit and center the screenshot |
+| Editor | `Ctrl/Cmd+1` | Center at 100% |
 | Editor | `Delete` / `Backspace` | Delete the selected annotation |
 | Editor | `Shift` while dragging | Arrows in 45° steps; square rectangles (drawing or handles) |
 | Editor | Double-click text in Select | Re-edit the label at the clicked point |
@@ -51,6 +56,21 @@ macOS also asks for Screen Recording permission on the first snip.
 | Editor | `Ctrl/Cmd+C` | Copy image |
 | Editor | `Ctrl/Cmd+S` | Save as PNG |
 | Editor | `Esc` | Finish text, cancel a drag, clear selection, or close, in that order |
+
+New editors open in Fit, which shows the entire screenshot and follows window
+resizing. Wheel or pinch zoom chooses a manual view; resizing preserves its
+magnification and the image point at the canvas center. The toolbar shows the
+current percentage and offers Fit and 100% actions with their shortcuts.
+At 100%, one screenshot pixel occupies one physical display pixel, including
+on Retina and scaled Windows displays.
+
+Zoom ranges from the smaller of 10% and Fit up to 800%. Pan follows your drag,
+keeps image edges reachable, and centers axes that already fit. Escape cancels
+an active pan and restores its starting view. Navigation preserves your tool,
+selection, and undo/redo history; it leaves saved and copied resolution intact.
+Space types normally while editing text, and zoom keeps text editing and IME
+composition active. Navigation input is ignored during drawing or another
+pointer gesture. Unmodified scrolling does not navigate.
 
 Select edits one annotation at a time. Arrows have handles at both endpoints;
 rectangles have handles at their four corners. Click empty canvas to deselect.

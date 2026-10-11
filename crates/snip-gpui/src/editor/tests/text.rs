@@ -111,7 +111,7 @@ fn clicks_place_the_caret_and_keep_one_undo_step_per_session(cx: &mut TestAppCon
 }
 
 /// Calls the editor's input handler the way the OS text input system does.
-fn ime<R>(
+pub(super) fn ime<R>(
     cx: &mut VisualTestContext,
     f: impl FnOnce(&mut Editor, &mut gpui::Window, &mut gpui::Context<Editor>) -> R,
 ) -> R {

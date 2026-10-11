@@ -19,8 +19,10 @@ picked up.
    input through GPUI's input handler, so IME and dead keys work. Automated
    checks pass; Windows was verified natively except a real IME and dead keys
    (none installed). macOS checks remain outstanding.
-5. **Zoom and pan:** Ctrl/Cmd+scroll or pinch to zoom, Space+drag to pan, and
-   100% and fit shortcuts.
+5. **Zoom and pan (implemented):** Ctrl/Cmd+scroll or pinch to zoom, Space+drag
+   to pan, and 100% and fit shortcuts and toolbar controls. Cursor-anchored
+   zoom, bounded panning, and DPI-aware views preserve editing and exports.
+   Automated checks pass; native Windows/macOS checks remain outstanding.
 6. **Crop polish:** handles to adjust the crop, a way to clear it, and the
    pixel size shown while dragging.
 7. **Save flow:** a default folder and a timestamped filename, plus copy and
