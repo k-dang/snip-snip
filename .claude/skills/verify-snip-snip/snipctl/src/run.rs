@@ -41,10 +41,12 @@ pub struct Run {
 pub fn start() -> Result<Run> {
     let name = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
-        .as_secs()
+        .as_millis()
         .to_string();
     let dir = verify_root().join(&name);
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(verify_root())?;
+    // A fast failed run must never overwrite another run's evidence/pids.
+    fs::create_dir(&dir)?;
     fs::write(verify_root().join("current"), &name)?;
     Ok(Run { dir })
 }

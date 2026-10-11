@@ -30,6 +30,7 @@ Each feature file has an H1 title, one paragraph of user-visible behavior, then 
 ## Features
 
 - [Snip](./snip.md): hotkey, frozen overlay, region selection, cancel.
+- [App shell](./app-shell.md): tray/menu-bar controls, Settings, capture shortcut, Quit.
 - [Annotate](./annotate.md): pencil, arrow, rectangle, text.
 - [Crop](./crop.md): crop to a sub-rectangle, applied to exports.
 - [Undo and redo](./undo-redo.md): history across annotations and crop.

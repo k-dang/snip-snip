@@ -31,5 +31,8 @@ picked up.
    into another app remain outstanding.
 7. **Save flow:** a default folder and a timestamped filename, plus copy and
    close in one action.
-8. **App shell:** a tray/menu-bar icon, launch at login, and a configurable
-   hotkey.
+8. **App shell (implemented):** a native tray/menu-bar icon with New snip,
+   Settings, and Quit, plus a persistent configurable hotkey and visible
+   failure recovery. Automated checks pass; Windows shell controls, shortcut
+   replacement/restart, menu dismissal before capture, and Quit were verified
+   natively. macOS checks and combined Save flow Copy & Close remain outstanding.

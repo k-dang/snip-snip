@@ -14,6 +14,14 @@ fn pause(ms: u64) {
 }
 
 impl Input {
+    #[cfg(windows)]
+    pub fn validate_chord(combo: &str) -> Result<()> {
+        for key in combo.split('+') {
+            parse_key(key)?;
+        }
+        Ok(())
+    }
+
     pub fn new() -> Result<Self> {
         Ok(Self(Enigo::new(&Settings::default())?))
     }
@@ -105,6 +113,7 @@ fn parse_key(name: &str) -> Result<Key> {
         "mod" => Key::Control,
         "esc" | "escape" => Key::Escape,
         "enter" => Key::Return,
+        "tab" => Key::Tab,
         "backspace" => Key::Backspace,
         "delete" => Key::Delete,
         "left" => Key::LeftArrow,

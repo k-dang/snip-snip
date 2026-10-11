@@ -4,7 +4,8 @@ A fast screenshot and annotation tool written entirely in Rust, inspired by [Sho
 
 ## Features
 
-- **Global shortcut** (`Alt+Shift+S`): freezes every monitor and opens a selection overlay.
+- **Configurable global shortcut** (initially `Alt+Shift+S`): freezes every monitor and opens a selection overlay.
+- **Tray/menu-bar controls** for New snip, Settings, and Quit.
 - **Editor** with a pencil, arrows, rectangle outlines, editable text, cropping,
   selection, moving, shape handles, shared colors and stroke widths, and undo/redo.
 - **Zoom and pan** with wheel or pinch zoom, Space+drag navigation, and Fit/100% controls.
@@ -20,7 +21,21 @@ You need [rustup](https://rustup.rs/). The pinned toolchain in `rust-toolchain.t
 cargo run --release -p snip-gpui
 ```
 
-The app runs in the background with no window. Press `Alt+Shift+S` to snip.
+The app runs in the background with a Windows tray icon or macOS menu-bar
+icon. Press `Alt+Shift+S` to snip, or choose **New snip** from its menu.
+
+Open **Settings**, choose **Record shortcut**, press your preferred chord,
+then choose **Apply**. Use Ctrl, Alt/Option, or Win/Command with a supported
+key; Shift may be added. Escape cancels recording. Tab moves between the
+controls, and Enter or Space activates the focused control. Successful
+changes take effect immediately and survive restarts. If a chord is in use
+or saving fails, the previous shortcut remains available and Settings shows
+an error. A startup shortcut conflict opens Settings; New snip still works.
+
+Closing Settings or an editor leaves the app running. Use **Quit** from the
+tray/menu-bar menu to exit. Shortcut settings are stored in the per-user
+configuration folder under `snip-snip/shortcut`; malformed settings use the
+default for the current session and are repaired only through an explicit Apply.
 
 On macOS, the build compiles GPUI's Metal shaders with full Xcode. With only the Command Line Tools, compile them at runtime instead:
 
@@ -29,12 +44,16 @@ cargo run --release -p snip-gpui --features gpui_platform/runtime_shaders
 ```
 
 macOS also asks for Screen Recording permission on the first snip.
+Capture shortcuts currently support the macOS ABC and U.S. keyboard layouts.
+Other layouts show a Settings error and retain menu-based New snip, so the
+app cannot silently bind a different physical key. Changing to a supported
+layout restores shortcut registration when the chord is available.
 
 ## Usage
 
 | Where | Key | Action |
 | --- | --- | --- |
-| Anywhere | `Alt+Shift+S` | Start a snip |
+| Anywhere | Configured shortcut (initially `Alt+Shift+S`) | Start a snip |
 | Overlay | Drag | Select a region and open it in the editor |
 | Overlay | `Esc` | Cancel |
 | Editor | `V` | Select (click an annotation; drag to move) |
