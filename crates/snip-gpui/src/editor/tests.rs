@@ -17,6 +17,9 @@ fn editor(cx: &mut TestAppContext) -> VisualTestContext {
     });
     let cx = VisualTestContext::from_window(window, cx);
     cx.simulate_scale_factor_change(1.0);
+    // Keep image coordinates exact for pixel assertions; fitted layouts have
+    // their own cases below, including the editor's minimum window size.
+    cx.simulate_resize(size(px(900.0), px(600.0)));
     cx.run_until_parked();
     cx
 }
@@ -49,6 +52,365 @@ fn click(cx: &mut VisualTestContext, x: f32, y: f32) {
 fn command(cx: &mut VisualTestContext, key: &str) {
     let modifier = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
     cx.simulate_keystrokes(&format!("{modifier}-{key}"));
+}
+
+fn toolbar(cx: &mut VisualTestContext, label: &'static str) {
+    let position = cx.debug_bounds(label).expect("rendered toolbar control").center();
+    cx.simulate_mouse_move(position, None, Modifiers::none());
+    cx.simulate_click(position, Modifiers::none());
+}
+
+#[gpui::test]
+fn style_is_shared_across_drawing_tools_and_saved_at_image_resolution(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    toolbar(&mut cx, "Blue");
+    toolbar(&mut cx, "Thick");
+    drag(&mut cx, (20.0, 30.0), (80.0, 30.0), Modifiers::none());
+    cx.simulate_keystrokes("a");
+    drag(&mut cx, (100.0, 30.0), (160.0, 30.0), Modifiers::none());
+    cx.simulate_keystrokes("r");
+    drag(&mut cx, (180.0, 30.0), (240.0, 70.0), Modifiers::none());
+    cx.simulate_keystrokes("t");
+    click(&mut cx, 20.0, 120.0);
+    cx.simulate_input("Blue");
+    cx.simulate_keystrokes("enter");
+
+    let blue = Color::rgb(0x00, 0x90, 0xFF);
+    let image = saved(&mut cx);
+    assert_image(
+        image.clone(),
+        &expected(vec![
+            Annotation::Stroke(Stroke {
+                points: vec![Point::new(20.0, 30.0), Point::new(80.0, 30.0)],
+                color: blue,
+                width: 6.0,
+            }),
+            Annotation::Arrow(Arrow {
+                tail: Point::new(100.0, 30.0),
+                head: Point::new(160.0, 30.0),
+                color: blue,
+                width: 6.0,
+            }),
+            Annotation::Rectangle(Rectangle {
+                start: Point::new(180.0, 30.0),
+                end: Point::new(240.0, 70.0),
+                color: blue,
+                width: 6.0,
+            }),
+            Annotation::Text(Text {
+                origin: Point::new(20.0, 120.0),
+                content: "Blue".into(),
+                size: 20.0,
+                color: blue,
+            }),
+        ]),
+    );
+    assert_eq!(*image.get_pixel(50, 32), Rgba([0x00, 0x90, 0xFF, 255]));
+    assert_eq!(*image.get_pixel(50, 34), WHITE);
+}
+
+#[gpui::test]
+fn a_selected_annotation_restyles_one_property_per_undo_and_sets_drawing_defaults(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_keystrokes("r");
+    drag(&mut cx, (40.0, 40.0), (100.0, 90.0), Modifiers::none());
+    cx.simulate_keystrokes("a");
+    drag(&mut cx, (150.0, 40.0), (230.0, 40.0), Modifiers::none());
+    cx.simulate_keystrokes("v");
+    click(&mut cx, 70.0, 40.0);
+    toolbar(&mut cx, "Green");
+    toolbar(&mut cx, "Thin");
+    let green = Color::rgb(0x30, 0xA4, 0x6C);
+    let styled = |color, width| {
+        expected(vec![
+            Annotation::Rectangle(Rectangle {
+                start: Point::new(40.0, 40.0),
+                end: Point::new(100.0, 90.0),
+                color,
+                width,
+            }),
+            arrow((150.0, 40.0), (230.0, 40.0)),
+        ])
+    };
+    assert_image(saved(&mut cx), &styled(green, 1.0));
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &styled(green, 3.0));
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &styled(INK, 3.0));
+    command(&mut cx, "shift-z");
+    assert_image(saved(&mut cx), &styled(green, 3.0));
+    command(&mut cx, "shift-z");
+    assert_image(saved(&mut cx), &styled(green, 1.0));
+    command(&mut cx, "z");
+    cx.simulate_keystrokes("p");
+    drag(&mut cx, (40.0, 140.5), (100.0, 140.5), Modifiers::none());
+    let image = saved(&mut cx);
+    assert_eq!(*image.get_pixel(70, 140), Rgba([0x30, 0xA4, 0x6C, 255]));
+    assert_eq!(*image.get_pixel(70, 142), WHITE);
+}
+
+#[gpui::test]
+fn text_color_finishes_the_session_and_restyles_separately_without_applying_width(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    toolbar(&mut cx, "Thick");
+    cx.simulate_keystrokes("t");
+    click(&mut cx, 30.0, 120.0);
+    cx.simulate_input("Hello");
+    toolbar(&mut cx, "Thin");
+    // Disabled width must not finish the active session or consume input.
+    cx.simulate_input("!");
+    toolbar(&mut cx, "Blue");
+    toolbar(&mut cx, "Green");
+    toolbar(&mut cx, "Medium");
+    let label = |color| {
+        expected(vec![Annotation::Text(Text {
+            origin: Point::new(30.0, 120.0),
+            content: "Hello!".into(),
+            size: 20.0,
+            color,
+        })])
+    };
+    assert_image(saved(&mut cx), &label(Color::rgb(0x30, 0xA4, 0x6C)));
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &label(Color::rgb(0x00, 0x90, 0xFF)));
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &label(INK));
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &expected(vec![]));
+    command(&mut cx, "shift-z");
+    cx.simulate_keystrokes("p");
+    drag(&mut cx, (30.0, 40.0), (100.0, 40.0), Modifiers::none());
+    let image = saved(&mut cx);
+    assert_eq!(*image.get_pixel(60, 42), Rgba([0x30, 0xA4, 0x6C, 255]));
+    assert_eq!(*image.get_pixel(60, 44), WHITE);
+    cx.simulate_keystrokes("t");
+    click(&mut cx, 200.0, 120.0);
+    toolbar(&mut cx, "Black");
+    // An empty text session leaves no annotation or history entry.
+    command(&mut cx, "z");
+    assert_image(saved(&mut cx), &label(INK));
+    cx.simulate_keystrokes("v");
+    click(&mut cx, 50.0, 125.0);
+    toolbar(&mut cx, "Black");
+    assert_image(saved(&mut cx), &label(Color::rgb(0, 0, 0)));
+}
+
+#[gpui::test]
+fn palette_and_width_presets_produce_their_declared_pixels(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    for (color, rgba, width, y, inside, outside) in [
+        ("Red", [0xE5, 0x48, 0x4D, 255], "Thin", 20.5, 20, 21),
+        ("Yellow", [0xF5, 0xD9, 0x0A, 255], "Medium", 50.5, 51, 52),
+        ("Green", [0x30, 0xA4, 0x6C, 255], "Thick", 80.5, 82, 84),
+        ("Blue", [0x00, 0x90, 0xFF, 255], "Thin", 110.5, 110, 111),
+        ("Black", [0, 0, 0, 255], "Medium", 140.5, 141, 142),
+    ] {
+        toolbar(&mut cx, color);
+        toolbar(&mut cx, width);
+        drag(&mut cx, (30.0, y), (100.0, y), Modifiers::none());
+        let image = saved(&mut cx);
+        assert_eq!(*image.get_pixel(60, inside), Rgba(rgba), "{color} {width}");
+        assert_eq!(*image.get_pixel(60, outside), WHITE, "{color} {width}");
+    }
+}
+
+#[gpui::test]
+fn selection_and_no_op_style_choices_preserve_defaults_and_redo(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_keystrokes("r");
+    drag(&mut cx, (40.0, 40.0), (100.0, 90.0), Modifiers::none());
+    toolbar(&mut cx, "Blue");
+    toolbar(&mut cx, "Thick");
+    cx.simulate_keystrokes("v");
+    click(&mut cx, 70.0, 40.0);
+    click(&mut cx, 200.0, 150.0);
+    cx.simulate_keystrokes("p");
+    drag(&mut cx, (150.0, 40.0), (230.0, 40.0), Modifiers::none());
+    let blue_stroke = Annotation::Stroke(Stroke {
+        points: vec![Point::new(150.0, 40.0), Point::new(230.0, 40.0)],
+        color: Color::rgb(0x00, 0x90, 0xFF),
+        width: 6.0,
+    });
+    let original = expected(vec![rectangle((40.0, 40.0), (100.0, 90.0)), blue_stroke]);
+    assert_image(saved(&mut cx), &original);
+    command(&mut cx, "z");
+    toolbar(&mut cx, "Green");
+    toolbar(&mut cx, "Thin");
+    cx.simulate_keystrokes("v");
+    click(&mut cx, 70.0, 40.0);
+    toolbar(&mut cx, "Red");
+    toolbar(&mut cx, "Medium");
+    command(&mut cx, "shift-z");
+    assert_image(saved(&mut cx), &original);
+    cx.simulate_keystrokes("p");
+    drag(&mut cx, (150.0, 140.0), (230.0, 140.0), Modifiers::none());
+    let image = saved(&mut cx);
+    assert_eq!(*image.get_pixel(180, 140), Rgba([0xE5, 0x48, 0x4D, 255]));
+    assert_eq!(*image.get_pixel(180, 142), WHITE);
+}
+
+#[gpui::test]
+fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    for scale in [1.0, 2.0] {
+        cx.simulate_scale_factor_change(scale);
+        cx.simulate_resize(size(px(480.0), px(320.0)));
+        cx.run_until_parked();
+        let canvas = cx.debug_bounds("editor-canvas").unwrap();
+        let mut controls = Vec::new();
+        for label in [
+            "Select",
+            "Pencil",
+            "Arrow",
+            "Rectangle",
+            "Text",
+            "Crop",
+            "Red",
+            "Yellow",
+            "Green",
+            "Blue",
+            "Black",
+            "Thin",
+            "Medium",
+            "Thick",
+            "Copy",
+            "Save…",
+        ] {
+            let bounds = cx.debug_bounds(label).expect(label);
+            assert!(
+                bounds.left() >= px(0.) && bounds.right() <= px(480.),
+                "{label} fits horizontally"
+            );
+            assert!(
+                bounds.top() >= px(0.) && bounds.bottom() <= canvas.top(),
+                "{label} stays above canvas"
+            );
+            for (other, previous) in &controls {
+                assert!(!bounds.intersects(previous), "{label} overlaps {other}");
+            }
+            controls.push((label, bounds));
+        }
+        assert!(canvas.size.height > px(32.), "canvas retains drawing space");
+    }
+}
+
+#[gpui::test]
+fn a_new_text_session_clears_the_previous_style_target(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_keystrokes("t");
+    click(&mut cx, 30.0, 120.0);
+    cx.simulate_input("First");
+    toolbar(&mut cx, "Blue");
+    click(&mut cx, 170.0, 120.0);
+    cx.simulate_input("Second");
+    cx.simulate_keystrokes("enter");
+    toolbar(&mut cx, "Green");
+    let blue = Color::rgb(0x00, 0x90, 0xFF);
+    assert_image(
+        saved(&mut cx),
+        &expected(vec![
+            Annotation::Text(Text {
+                origin: Point::new(30.0, 120.0),
+                content: "First".into(),
+                size: 20.0,
+                color: blue,
+            }),
+            Annotation::Text(Text {
+                origin: Point::new(170.0, 120.0),
+                content: "Second".into(),
+                size: 20.0,
+                color: blue,
+            }),
+        ]),
+    );
+}
+
+#[gpui::test]
+fn high_dpi_restyles_preserve_geometry_and_crop_for_all_line_tools(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_scale_factor_change(2.0);
+    cx.simulate_resize(size(px(480.0), px(320.0)));
+    cx.run_until_parked();
+    toolbar(&mut cx, "Thick");
+    drag(&mut cx, (40.0, 40.0), (100.0, 40.0), Modifiers::none());
+    let image = saved(&mut cx);
+    assert_eq!(*image.get_pixel(70, 45), Rgba([0xE5, 0x48, 0x4D, 255]));
+    assert_eq!(*image.get_pixel(70, 47), WHITE);
+    cx.simulate_keystrokes("a");
+    drag(&mut cx, (40.0, 90.0), (100.0, 90.0), Modifiers::none());
+    cx.simulate_keystrokes("r");
+    drag(&mut cx, (40.0, 140.0), (100.0, 180.0), Modifiers::none());
+    cx.simulate_keystrokes("c");
+    drag(&mut cx, (20.0, 20.0), (120.0, 190.0), Modifiers::none());
+    cx.simulate_keystrokes("v");
+    for y in [40.0, 90.0, 140.0] {
+        click(&mut cx, 70.0, y);
+        toolbar(&mut cx, "Yellow");
+        toolbar(&mut cx, "Thin");
+    }
+    let yellow = Color::rgb(0xF5, 0xD9, 0x0A);
+    let marks = expected(vec![
+        Annotation::Stroke(Stroke {
+            points: vec![Point::new(40.0, 40.0), Point::new(100.0, 40.0)],
+            color: yellow,
+            width: 2.0,
+        }),
+        Annotation::Arrow(Arrow {
+            tail: Point::new(40.0, 90.0),
+            head: Point::new(100.0, 90.0),
+            color: yellow,
+            width: 2.0,
+        }),
+        Annotation::Rectangle(Rectangle {
+            start: Point::new(40.0, 140.0),
+            end: Point::new(100.0, 180.0),
+            color: yellow,
+            width: 2.0,
+        }),
+    ]);
+    assert_image(
+        saved(&mut cx),
+        &image::imageops::crop_imm(&marks, 20, 20, 100, 170).to_image(),
+    );
+}
+
+#[gpui::test]
+fn style_clicks_cancel_unfinished_moves_and_drawing_before_committing(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_keystrokes("r");
+    drag(&mut cx, (40.0, 40.0), (100.0, 90.0), Modifiers::none());
+    cx.simulate_keystrokes("v");
+    let from = image_point(&mut cx, 70.0, 40.0);
+    let to = image_point(&mut cx, 90.0, 60.0);
+    cx.simulate_mouse_move(from, None, Modifiers::none());
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    toolbar(&mut cx, "Blue");
+    assert_image(
+        saved(&mut cx),
+        &expected(vec![Annotation::Rectangle(Rectangle {
+            start: Point::new(40.0, 40.0),
+            end: Point::new(100.0, 90.0),
+            color: Color::rgb(0x00, 0x90, 0xFF),
+            width: 3.0,
+        })]),
+    );
+    command(&mut cx, "z");
+    assert_image(
+        saved(&mut cx),
+        &expected(vec![rectangle((40.0, 40.0), (100.0, 90.0))]),
+    );
+    cx.simulate_keystrokes("p");
+    let from = image_point(&mut cx, 170.0, 140.0);
+    let to = image_point(&mut cx, 220.0, 140.0);
+    cx.simulate_mouse_move(from, None, Modifiers::none());
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+    toolbar(&mut cx, "Thick");
+    command(&mut cx, "shift-z");
+    let image = saved(&mut cx);
+    assert_eq!(*image.get_pixel(70, 40), Rgba([0x00, 0x90, 0xFF, 255]));
+    assert_eq!(*image.get_pixel(200, 140), WHITE);
 }
 
 fn saved(cx: &mut VisualTestContext) -> RgbaImage {
