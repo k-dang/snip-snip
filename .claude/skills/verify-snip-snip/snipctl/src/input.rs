@@ -34,15 +34,16 @@ impl Input {
         Ok(())
     }
 
-    /// Types letters, digits, and spaces as key presses. GPUI reads typed
-    /// characters from key events, so Unicode text injection would be lost.
+    /// Types letters, digits, and spaces as key presses, so tool shortcuts
+    /// see real keys; any other character is injected as Unicode text, which
+    /// reaches the editor through the OS text input path.
     pub fn type_keys(&mut self, text: &str) -> Result<()> {
         for c in text.chars() {
             match c {
                 'a'..='z' | '0'..='9' => self.chord(&c.to_string())?,
                 'A'..='Z' => self.chord(&format!("shift+{}", c.to_ascii_lowercase()))?,
                 ' ' => self.chord("space")?,
-                _ => bail!("type supports letters, digits, and spaces; got {c:?}"),
+                _ => self.text(&c.to_string())?,
             }
         }
         Ok(())
@@ -105,6 +106,13 @@ fn parse_key(name: &str) -> Result<Key> {
         "esc" | "escape" => Key::Escape,
         "enter" => Key::Return,
         "backspace" => Key::Backspace,
+        "delete" => Key::Delete,
+        "left" => Key::LeftArrow,
+        "right" => Key::RightArrow,
+        "up" => Key::UpArrow,
+        "down" => Key::DownArrow,
+        "home" => Key::Home,
+        "end" => Key::End,
         "space" => Key::Space,
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphanumeric()) => {
             Key::Unicode(s.chars().next().unwrap())

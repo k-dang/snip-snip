@@ -95,7 +95,8 @@ pub struct Stroke {
     pub width: f32,
 }
 
-/// A single-line text label. `origin` is the top-left of its layout box.
+/// A text label whose lines are separated by `\n` and never wrap. `origin`
+/// is the top-left of its layout box.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Text {
     pub origin: Point,

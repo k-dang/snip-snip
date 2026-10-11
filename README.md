@@ -40,11 +40,12 @@ macOS also asks for Screen Recording permission on the first snip.
 | Editor | `P` | Pencil |
 | Editor | `A` | Arrow (drag toward the tip) |
 | Editor | `R` | Rectangle outline |
-| Editor | `T` | Text (click to place; `Enter` or `Esc` to finish) |
+| Editor | `T` | Text (click to place or re-edit; `Enter` for a new line; `Esc` or click away to finish) |
 | Editor | `C` | Crop |
 | Editor | `Delete` / `Backspace` | Delete the selected annotation |
 | Editor | `Shift` while dragging | Arrows in 45° steps; square rectangles (drawing or handles) |
-| Editor | Double-click text in Select | Re-edit the label |
+| Editor | Double-click text in Select | Re-edit the label at the clicked point |
+| Editor | Arrows, `Home`/`End` while typing | Move the caret; click inside the label to place it |
 | Editor | `Ctrl/Cmd+Z` | Undo one completed edit |
 | Editor | `Ctrl/Cmd+Shift+Z` | Redo (`Ctrl+Y` also works on Windows) |
 | Editor | `Ctrl/Cmd+C` | Copy image |

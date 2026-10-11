@@ -1,5 +1,5 @@
 //! Drive the rendered editor through GPUI events and observe saved PNGs.
-//! Only the OS file picker is simulated; no private editor state is inspected.
+//! The OS file picker and text input system are simulated; no private editor state is inspected.
 
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, Pixels, TestAppContext, VisualTestContext, point, px, size,
@@ -73,7 +73,7 @@ fn style_is_shared_across_drawing_tools_and_saved_at_image_resolution(cx: &mut T
     cx.simulate_keystrokes("t");
     click(&mut cx, 20.0, 120.0);
     cx.simulate_input("Blue");
-    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
 
     let blue = Color::rgb(0x00, 0x90, 0xFF);
     let image = saved(&mut cx);
@@ -303,7 +303,7 @@ fn a_new_text_session_clears_the_previous_style_target(cx: &mut TestAppContext) 
     toolbar(&mut cx, "Blue");
     click(&mut cx, 170.0, 120.0);
     cx.simulate_input("Second");
-    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
     toolbar(&mut cx, "Green");
     let blue = Color::rgb(0x00, 0x90, 0xFF);
     assert_image(
@@ -618,37 +618,6 @@ fn arrow_endpoints_and_shift_constraints_use_the_fixed_endpoint(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn double_click_reedits_text_without_moving_or_creating_a_label(cx: &mut TestAppContext) {
-    let mut cx = editor(cx);
-    cx.simulate_keystrokes("t");
-    click(&mut cx, 30.0, 120.0);
-    cx.simulate_input("Hello");
-    cx.simulate_keystrokes("enter v");
-    click(&mut cx, 50.0, 125.0);
-    let position = image_point(&mut cx, 50.0, 125.0);
-    cx.simulate_event(MouseDownEvent {
-        position,
-        button: MouseButton::Left,
-        click_count: 2,
-        ..Default::default()
-    });
-    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
-    cx.simulate_input("var");
-    cx.simulate_keystrokes("backspace escape");
-    let label = |content: &str| {
-        Annotation::Text(Text {
-            origin: Point::new(30.0, 120.0),
-            content: content.into(),
-            size: 20.0,
-            color: INK,
-        })
-    };
-    assert_image(saved(&mut cx), &expected(vec![label("Hellova")]));
-    command(&mut cx, "z");
-    assert_image(saved(&mut cx), &expected(vec![label("Hello")]));
-}
-
-#[gpui::test]
 fn handles_keep_the_grab_offset_on_high_dpi_and_fitted_images(cx: &mut TestAppContext) {
     let mut cx = editor(cx);
     cx.simulate_keystrokes("r");
@@ -806,3 +775,5 @@ fn stationary_shift_changes_during_resize_still_commit_as_one_edit(cx: &mut Test
         &expected(vec![rectangle((40.0, 40.0), (130.0, 110.0))]),
     );
 }
+
+mod text;

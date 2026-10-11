@@ -25,8 +25,8 @@ snipctl <command> [args]
   snip X Y W H          Alt+Shift+S, drag that screen rect on the overlay, wait for the editor
   cancel-snip           Alt+Shift+S, then Esc on the overlay; asserts no editor opens
   layout                print where the editor draws the image
-  key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  ctrl+y  esc
-  type TEXT...          focus the editor and type letters, digits, and spaces
+  key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  left  home  esc
+  type TEXT...          focus the editor and type; letters, digits, spaces as keys, others as Unicode
   drag X1 Y1 X2 Y2      focus the editor and drag between two points in image pixels
   click X Y             focus the editor and click a point in image pixels
   shot NAME             save the editor window (or the primary screen) to <run>/NAME.png
@@ -286,12 +286,12 @@ fn cancel_snip() -> Result<()> {
     run.step("overlay opened and closed on Esc; no editor")
 }
 
-/// Focuses the editor so keys reach it, returning its image layout.
-fn focus_editor(run: &Run, input: &mut Input) -> Result<Layout> {
+/// Focuses the editor so keys reach it, returning its window.
+fn focus_editor(run: &Run, input: &mut Input) -> Result<xcap::Window> {
     let pid = app(run)?;
     let window = screen::editor(pid)?;
     platform::focus(&window, pid, input)?;
-    Layout::of(run, &window)
+    Ok(window)
 }
 
 fn layout() -> Result<()> {
@@ -327,7 +327,7 @@ fn type_text(text: &str) -> Result<()> {
 fn drag(n: Vec<f32>) -> Result<()> {
     let run = run::current()?;
     let mut input = Input::new()?;
-    let layout = focus_editor(&run, &mut input)?;
+    let layout = Layout::of(&run, &focus_editor(&run, &mut input)?)?;
     let (a, b) = (layout.to_screen((n[0], n[1])), layout.to_screen((n[2], n[3])));
     input.drag(a, b)?;
     input.park()?;
@@ -340,7 +340,7 @@ fn drag(n: Vec<f32>) -> Result<()> {
 fn click(n: Vec<f32>) -> Result<()> {
     let run = run::current()?;
     let mut input = Input::new()?;
-    let layout = focus_editor(&run, &mut input)?;
+    let layout = Layout::of(&run, &focus_editor(&run, &mut input)?)?;
     let at = layout.to_screen((n[0], n[1]));
     input.click(at)?;
     input.park()?;

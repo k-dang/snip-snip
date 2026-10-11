@@ -427,3 +427,72 @@ fn shift_rectangles_use_the_larger_side_in_each_drag_quadrant() {
         assert_eq!(pointer.square_corner(anchor), expected);
     }
 }
+
+fn label(content: &str) -> Text {
+    Text {
+        origin: Point::new(20.0, 30.0),
+        content: content.into(),
+        size: 20.0,
+        color: RED,
+    }
+}
+
+#[test]
+fn multi_line_text_is_as_tall_as_its_lines_including_an_empty_last_line() {
+    let mut renderer = Renderer::new();
+    let (one_width, one_height) = renderer.text_size(&label("Hello"));
+    let (two_width, two_height) = renderer.text_size(&label("Hi\nHello"));
+    assert_eq!(two_width, one_width, "width follows the widest line");
+    assert_eq!(two_height, 2.0 * one_height);
+    assert_eq!(renderer.text_size(&label("Hello\n")).1, 2.0 * one_height);
+    assert_eq!(renderer.text_size(&label("\n\n")).1, 3.0 * one_height);
+}
+
+#[test]
+fn carets_sit_after_the_text_before_them_and_clicks_find_the_nearest_caret() {
+    let mut renderer = Renderer::new();
+    // A space after "é" avoids kerning, so prefix widths give exact carets.
+    let text = label("Hi\né x");
+    let line = renderer.text_size(&label("H")).1;
+    let width = |renderer: &mut Renderer, s: &str| renderer.text_size(&label(s)).0;
+    let carets = [
+        (0, Point::new(20.0, 30.0)),
+        (2, Point::new(20.0 + width(&mut renderer, "Hi"), 30.0)),
+        (3, Point::new(20.0, 30.0 + line)),
+        (5, Point::new(20.0 + width(&mut renderer, "é"), 30.0 + line)),
+        (7, Point::new(20.0 + width(&mut renderer, "é x"), 30.0 + line)),
+    ];
+    for (index, top) in carets {
+        assert_eq!(
+            renderer.text_caret(&text, index),
+            (top, line),
+            "caret at byte {index}"
+        );
+        let inside = Point::new(top.x + 0.5, top.y + line / 2.0);
+        assert_eq!(
+            renderer.text_index_at(&text, inside),
+            index,
+            "click beside byte {index}"
+        );
+    }
+    // Points outside the label clamp to its nearest line and line edge.
+    assert_eq!(renderer.text_index_at(&text, Point::new(0.0, 0.0)), 0);
+    assert_eq!(renderer.text_index_at(&text, Point::new(300.0, 35.0)), 2);
+    assert_eq!(renderer.text_index_at(&text, Point::new(300.0, 300.0)), 7);
+}
+
+#[test]
+fn an_empty_last_line_has_a_caret_at_its_start() {
+    let mut renderer = Renderer::new();
+    let text = label("Hi\n");
+    let line = renderer.text_size(&label("H")).1;
+    assert_eq!(
+        renderer.text_caret(&text, 3),
+        (Point::new(20.0, 30.0 + line), line)
+    );
+    assert_eq!(
+        renderer.text_index_at(&text, Point::new(40.0, 30.0 + 1.5 * line)),
+        3
+    );
+    assert_eq!(renderer.text_caret(&label(""), 0), (Point::new(20.0, 30.0), line));
+}
