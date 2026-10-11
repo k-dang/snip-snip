@@ -363,3 +363,67 @@ fn a_text_session_and_reedit_each_undo_in_one_step() {
     assert!(history.redo(&mut doc));
     assert_eq!(doc.annotations, original);
 }
+
+#[test]
+fn arrow_snapping_preserves_already_constrained_endpoints_exactly() {
+    for anchor in [Point::new(40.0, 40.0), Point::new(40.25, 40.75)] {
+        for (dx, dy) in [
+            (0.0, 0.0),
+            (60.0, 0.0),
+            (60.0, 60.0),
+            (0.0, 60.0),
+            (-60.0, 60.0),
+            (-60.0, 0.0),
+            (-60.0, -60.0),
+            (0.0, -60.0),
+            (60.0, -60.0),
+        ] {
+            let endpoint = Point::new(anchor.x + dx, anchor.y + dy);
+            assert_eq!(endpoint.snap_45(anchor), endpoint);
+        }
+    }
+}
+
+#[test]
+fn shift_arrows_snap_to_45_degree_steps_without_changing_length() {
+    let anchor = Point::new(50.0, 50.0);
+    for (pointer, expected) in [
+        (Point::new(74.0, 57.0), Point::new(75.0, 50.0)),
+        (Point::new(57.0, 74.0), Point::new(50.0, 75.0)),
+        (Point::new(26.0, 43.0), Point::new(25.0, 50.0)),
+        (Point::new(43.0, 26.0), Point::new(50.0, 25.0)),
+        (Point::new(62.0, 59.0), Point::new(60.606_6, 60.606_6)),
+        (Point::new(38.0, 59.0), Point::new(39.393_4, 60.606_6)),
+        (Point::new(38.0, 41.0), Point::new(39.393_4, 39.393_4)),
+        (Point::new(62.0, 41.0), Point::new(60.606_6, 39.393_4)),
+        (anchor, anchor),
+    ] {
+        let snapped = pointer.snap_45(anchor);
+        if expected.x == anchor.x || expected.y == anchor.y {
+            assert_eq!(snapped, expected);
+        }
+        assert!(
+            (snapped.x - expected.x).abs() < 0.0001,
+            "{pointer:?} snapped to {snapped:?}"
+        );
+        assert!(
+            (snapped.y - expected.y).abs() < 0.0001,
+            "{pointer:?} snapped to {snapped:?}"
+        );
+    }
+}
+
+#[test]
+fn shift_rectangles_use_the_larger_side_in_each_drag_quadrant() {
+    let anchor = Point::new(50.0, 50.0);
+    for (pointer, expected) in [
+        (Point::new(80.0, 60.0), Point::new(80.0, 80.0)),
+        (Point::new(40.0, 80.0), Point::new(20.0, 80.0)),
+        (Point::new(20.0, 40.0), Point::new(20.0, 20.0)),
+        (Point::new(60.0, 20.0), Point::new(80.0, 20.0)),
+        (Point::new(50.0, 80.0), Point::new(80.0, 80.0)),
+        (anchor, anchor),
+    ] {
+        assert_eq!(pointer.square_corner(anchor), expected);
+    }
+}

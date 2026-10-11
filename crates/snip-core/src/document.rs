@@ -11,6 +11,38 @@ impl Point {
     pub fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
+
+    /// Snaps an arrow endpoint to 45° steps about `anchor`, preserving length.
+    pub fn snap_45(self, anchor: Self) -> Self {
+        let dx = self.x - anchor.x;
+        let dy = self.y - anchor.y;
+        // Keep constrained endpoints exact so unchanged edits remain history no-ops.
+        if dx == 0.0 || dy == 0.0 || dx.abs() == dy.abs() {
+            return self;
+        }
+        let octant = (dy.atan2(dx) / std::f32::consts::FRAC_PI_4).round() as i32;
+        let length = dx.hypot(dy);
+        let diagonal = length * std::f32::consts::FRAC_1_SQRT_2;
+        let (x, y) = match octant.rem_euclid(8) {
+            0 => (length, 0.0),
+            1 => (diagonal, diagonal),
+            2 => (0.0, length),
+            3 => (-diagonal, diagonal),
+            4 => (-length, 0.0),
+            5 => (-diagonal, -diagonal),
+            6 => (0.0, -length),
+            _ => (diagonal, -diagonal),
+        };
+        Self::new(anchor.x + x, anchor.y + y)
+    }
+
+    /// A square's dragged corner, using the larger displacement from `anchor`.
+    pub fn square_corner(self, anchor: Self) -> Self {
+        let dx = self.x - anchor.x;
+        let dy = self.y - anchor.y;
+        let side = dx.abs().max(dy.abs());
+        Self::new(anchor.x + side.copysign(dx), anchor.y + side.copysign(dy))
+    }
 }
 
 /// An integer pixel rectangle, used for crops.
