@@ -15,8 +15,10 @@ picked up.
    annotation tools. Changing a style also restyles the selected annotation,
    with undo/redo. Text uses color only. Automated checks pass; native
    Windows/macOS checks remain outstanding.
-4. **Text:** multi-line text, a visible caret, and OS text input through GPUI's
-   input handler, so IME and dead keys work.
+4. **Text (implemented):** multi-line text, a movable caret, and OS text
+   input through GPUI's input handler, so IME and dead keys work. Automated
+   checks pass; Windows was verified natively except a real IME and dead keys
+   (none installed). macOS checks remain outstanding.
 5. **Zoom and pan:** Ctrl/Cmd+scroll or pinch to zoom, Space+drag to pan, and
    100% and fit shortcuts.
 6. **Crop polish:** handles to adjust the crop, a way to clear it, and the

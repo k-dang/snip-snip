@@ -1,4 +1,4 @@
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, fontdb};
+use cosmic_text::{Attrs, Buffer, Cursor, Family, FontSystem, Metrics, Shaping, SwashCache, fontdb};
 use image::{ImageEncoder, RgbaImage, codecs::png::PngEncoder};
 use tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, Pixmap, Transform};
 
@@ -79,6 +79,39 @@ impl Renderer {
         (size.0, size.1.max(text.size * LINE_HEIGHT))
     }
 
+    /// The label's layout box in image pixels, for hit testing.
+    pub fn text_box(&mut self, text: &Text) -> Bounds {
+        let (width, height) = self.text_size(text);
+        Bounds::from_corners(
+            text.origin,
+            Point::new(text.origin.x + width, text.origin.y + height),
+        )
+    }
+
+    /// The caret before byte `index` of `text.content`: its top in image pixels
+    /// and its height. `index` must be a character boundary.
+    pub fn text_caret(&mut self, text: &Text, index: usize) -> (Point, f32) {
+        let (x, top) = self
+            .layout(text)
+            .cursor_position(&cursor_at(&text.content, index))
+            .expect("every line, even an empty one, is laid out");
+        (
+            Point::new(text.origin.x + x, text.origin.y + top),
+            text.size * LINE_HEIGHT,
+        )
+    }
+
+    /// The byte index in `text.content` whose caret is nearest `point`, on a
+    /// grapheme boundary, for placing the caret with a click. Points above or
+    /// below the label land at its start or end.
+    pub fn text_index_at(&mut self, text: &Text, point: Point) -> usize {
+        let buffer = self.layout(text);
+        let cursor = buffer
+            .hit(point.x - text.origin.x, point.y - text.origin.y)
+            .unwrap_or_default();
+        line_start(&text.content, cursor.line) + cursor.index
+    }
+
     /// Finds the last-painted annotation under `point`, ignoring the crop.
     /// `tolerance` is nonnegative image-pixel slop, supplied by the caller.
     pub fn annotation_at(&mut self, doc: &Document, point: Point, tolerance: f32) -> Option<usize> {
@@ -120,15 +153,7 @@ impl Renderer {
                         && point.y > inner.min.y
                         && point.y < inner.max.y)
             }
-            Annotation::Text(text) => {
-                let (width, height) = self.text_size(text);
-                Bounds::from_corners(
-                    text.origin,
-                    Point::new(text.origin.x + width, text.origin.y + height),
-                )
-                .grow(tolerance)
-                .contains(point)
-            }
+            Annotation::Text(text) => self.text_box(text).grow(tolerance).contains(point),
         })
     }
 
@@ -160,11 +185,7 @@ impl Renderer {
             Annotation::Rectangle(rectangle) => Bounds::from_corners(rectangle.start, rectangle.end)
                 .grow(rectangle.width.max(0.0) / 2.0 + 1.0),
             Annotation::Text(text) => {
-                let (width, height) = self.text_size(text);
-                let mut bounds = Bounds::from_corners(
-                    text.origin,
-                    Point::new(text.origin.x + width, text.origin.y + height),
-                );
+                let mut bounds = self.text_box(text);
                 let mut buffer = self.layout(text);
                 let (ox, oy) = (text.origin.x.round(), text.origin.y.round());
                 // Layout advance alone does not cover every glyph's ink,
@@ -226,6 +247,18 @@ pub fn encode_png(image: &RgbaImage) -> Vec<u8> {
         )
         .expect("encoding to memory cannot fail");
     png
+}
+
+/// The cosmic-text cursor for byte `index`: its line and byte within it.
+fn cursor_at(content: &str, index: usize) -> Cursor {
+    let before = &content[..index];
+    let line = before.matches('\n').count();
+    Cursor::new(line, index - before.rfind('\n').map_or(0, |i| i + 1))
+}
+
+/// The byte offset where line `line` of `content` starts.
+fn line_start(content: &str, line: usize) -> usize {
+    content.split_inclusive('\n').take(line).map(str::len).sum()
 }
 
 fn paint_stroke(pixmap: &mut Pixmap, stroke: &Stroke) {

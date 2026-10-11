@@ -22,6 +22,7 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "9ab0715969e9854f2
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "9ab0715969e9854f2efe61a9d782e7698e5fe6d2", features = ["font-kit"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 tiny-skia = "0.12"
+unicode-segmentation = "1.13"
 xcap = "0.9"
 arboard = "3.6"
 futures = "0.3"

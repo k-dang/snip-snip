@@ -44,8 +44,9 @@ pub fn editor(pid: u32) -> Result<xcap::Window> {
 }
 
 /// Where the editor paints the image. Mirrors crates/snip-gpui/src/editor.rs:
-/// a 44 px toolbar, 16 px canvas padding, the image centered and never more
+/// 16 px canvas padding below the toolbar, the image centered and never more
 /// than one image pixel per device pixel. All lengths there are logical px.
+/// The toolbar wraps on narrow windows, so its height is measured instead.
 pub struct Layout {
     pub origin: (f32, f32),
     /// Screen units per image pixel.
@@ -62,7 +63,7 @@ impl Layout {
         let (w, h) = size.trim().split_once('x').context("bad image.size")?;
         let image: (u32, u32) = (w.parse()?, h.parse()?);
 
-        let toolbar = 44.0 * units_per_logical;
+        let toolbar = toolbar_bottom(window)? - content.y;
         let canvas = Rect {
             x: content.x,
             y: content.y + toolbar,
@@ -86,6 +87,25 @@ impl Layout {
             (self.origin.1 + y * self.fit).round() as i32,
         )
     }
+}
+
+/// The toolbar's bottom border color (`0x333336` in the editor).
+const TOOLBAR_BORDER: [u8; 3] = [0x33, 0x33, 0x36];
+
+/// The screen y just below the toolbar: the first window row that is mostly
+/// the toolbar's 1 px bottom border.
+fn toolbar_bottom(window: &xcap::Window) -> Result<f32> {
+    let capture = window.capture_image()?;
+    let per_unit = capture.width() as f32 / window.width()? as f32;
+    let row = (0..capture.height())
+        .find(|&y| {
+            let border = (0..capture.width())
+                .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
+                .count();
+            border as f32 >= 0.8 * capture.width() as f32
+        })
+        .context("no toolbar border in the editor window")?;
+    Ok(window.y()? as f32 + (row + 1) as f32 / per_unit)
 }
 
 /// Screenshots the editor window, or the primary monitor when none is open.

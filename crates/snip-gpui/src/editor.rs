@@ -13,17 +13,20 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, Context, CursorStyle, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render, RenderImage, SharedString,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, hsla, outline, point,
-    prelude::*, px, rgb, size,
+    App, Bounds, Context, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Render, RenderImage, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div,
+    fill, hsla, outline, point, prelude::*, px, rgb, size,
 };
 use snip_core::{
     Annotation, Arrow, Color, Document, History, Point, Rect, Rectangle, Renderer, RgbaImage, Stroke, Text,
 };
 
+use text::{TextOverlay, TextSession};
+
 use crate::{capture::to_render_image, drag};
 
+mod text;
 // GPUI's rendered-element selectors are only available in debug builds.
 #[cfg(all(test, debug_assertions))]
 mod tests;
@@ -215,8 +218,7 @@ struct Editor {
     selected: Option<usize>,
     cursor: CursorStyle,
     gesture: Option<Gesture>,
-    /// Index of the text annotation receiving keystrokes.
-    editing: Option<usize>,
+    editing: Option<TextSession>,
     viewport: Rc<Cell<Option<Viewport>>>,
     focus: FocusHandle,
     status: SharedString,
@@ -289,6 +291,13 @@ impl Editor {
         let p = viewport.to_image(event.position);
         let (width, height) = self.doc.image.dimensions();
         let inside = (0.0..width as f32).contains(&p.x) && (0.0..height as f32).contains(&p.y);
+        // A click inside the label being edited only moves its caret.
+        if let Some(index) = self.editing_index()
+            && self.text_at(p) == Some(index)
+        {
+            self.start_text(index, p, window);
+            return cx.notify();
+        }
         self.cancel_gesture(window);
         self.finish_text(window);
         if self.tool != Tool::Select {
@@ -317,7 +326,7 @@ impl Editor {
                         if event.click_count == 2
                             && matches!(self.doc.annotations[index], Annotation::Text(_))
                         {
-                            self.editing = Some(index);
+                            self.start_text(index, p, window);
                         } else {
                             self.gesture = Some(Gesture::Edit {
                                 index,
@@ -359,7 +368,7 @@ impl Editor {
                 self.gesture = Some(Gesture::Crop { start: p, previous });
             }
             Tool::Text if inside => {
-                self.editing = Some(self.text_at(p).unwrap_or_else(|| {
+                let index = self.text_at(p).unwrap_or_else(|| {
                     self.doc.annotations.push(Annotation::Text(Text {
                         origin: p,
                         content: String::new(),
@@ -367,7 +376,8 @@ impl Editor {
                         color: self.ink_color,
                     }));
                     self.doc.annotations.len() - 1
-                }));
+                });
+                self.start_text(index, p, window);
             }
             _ => {}
         }
@@ -604,7 +614,6 @@ impl Editor {
         if changed {
             self.rerender(window);
         }
-        self.editing = None;
         self.selected = None;
         self.update_cursor(window);
         cx.notify();
@@ -623,22 +632,13 @@ impl Editor {
             _ => {}
         }
 
-        if let Some(Annotation::Text(text)) = self.editing.and_then(|i| self.doc.annotations.get_mut(i)) {
-            match keystroke.key.as_str() {
-                "escape" | "enter" => self.finish_text(window),
-                "backspace" => {
-                    text.content.pop();
-                    self.rerender(window);
-                }
-                _ => match &keystroke.key_char {
-                    Some(typed) if !shortcut => {
-                        text.content.push_str(typed);
-                        self.rerender(window);
-                    }
-                    _ => return,
-                },
+        if self.editing.is_some() {
+            // Unhandled keys propagate so typed characters reach the input handler.
+            if self.text_key_down(&keystroke.key, window) {
+                cx.stop_propagation();
+                cx.notify();
             }
-            return cx.notify();
+            return;
         }
 
         if keystroke.key != "escape"
@@ -680,30 +680,6 @@ impl Editor {
             }
             _ => {}
         }
-    }
-
-    /// Ends text editing, dropping the label if it was left empty.
-    fn finish_text(&mut self, window: &mut Window) {
-        let Some(index) = self.editing.take() else { return };
-        if matches!(&self.doc.annotations[index], Annotation::Text(t) if t.content.is_empty()) {
-            self.doc.annotations.remove(index);
-            self.selected = None;
-            self.rerender(window);
-        }
-        self.history.commit(&self.doc);
-        self.update_cursor(window);
-    }
-
-    /// The topmost text annotation under `p`, if any.
-    fn text_at(&mut self, p: Point) -> Option<usize> {
-        let renderer = &mut self.renderer;
-        self.doc.annotations.iter().rposition(|a| match a {
-            Annotation::Text(t) => {
-                let (w, h) = renderer.text_size(t);
-                (t.origin.x..=t.origin.x + w).contains(&p.x) && (t.origin.y..=t.origin.y + h).contains(&p.y)
-            }
-            _ => false,
-        })
     }
 
     fn export(&mut self, window: &mut Window) -> RgbaImage {
@@ -763,10 +739,7 @@ impl Editor {
             Some(Gesture::Annotation(annotation)) => Some(annotation.clone()),
             _ => None,
         };
-        let caret = self.editing.and_then(|i| match &self.doc.annotations[i] {
-            Annotation::Text(t) => Some((t.clone(), self.renderer.text_size(t))),
-            _ => None,
-        });
+        let text = self.text_overlay();
         let selection = self
             .selected
             .and_then(|i| self.doc.annotations.get(i))
@@ -780,7 +753,7 @@ impl Editor {
         CanvasOverlay {
             live_annotation,
             crop: self.doc.crop,
-            caret: caret.map(|(t, (w, h))| (Point::new(t.origin.x + w, t.origin.y), h)),
+            text,
             selection,
         }
     }
@@ -789,8 +762,7 @@ impl Editor {
 struct CanvasOverlay {
     live_annotation: Option<Annotation>,
     crop: Option<Rect>,
-    /// Caret top and height, in image pixels.
-    caret: Option<(Point, f32)>,
+    text: Option<TextOverlay>,
     selection: Option<SelectionOverlay>,
 }
 
@@ -807,6 +779,8 @@ impl Render for Editor {
         let overlay = self.overlay();
         let device_scale = window.scale_factor();
         let this = cx.entity();
+        let editing = self.editing.is_some();
+        let focus = self.focus.clone();
 
         div()
             .size_full()
@@ -830,6 +804,7 @@ impl Render for Editor {
                     .items_center()
                     .gap_2()
                     .border_b_1()
+                    // snipctl finds the canvas by this border's color.
                     .border_color(rgb(0x333336))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -878,7 +853,14 @@ impl Render for Editor {
                     .child(
                         canvas(
                             |_, _, _| {},
-                            move |bounds, _, window, _| {
+                            move |bounds, _, window, cx| {
+                                if editing {
+                                    window.handle_input(
+                                        &focus,
+                                        ElementInputHandler::new(bounds, this.clone()),
+                                        cx,
+                                    );
+                                }
                                 drag::track(window, this, Self::on_mouse_move, Self::on_mouse_up);
                                 let viewport = fit(bounds, image_size, device_scale);
                                 viewport_cell.set(Some(viewport));
@@ -895,7 +877,7 @@ impl Editor {
     /// Selection displays its own style without replacing drawing defaults.
     fn displayed_style(&self, window: &Window) -> (Color, Option<f32>) {
         let annotation = self
-            .editing
+            .editing_index()
             .or(self.selected)
             .and_then(|i| self.doc.annotations.get(i));
         match annotation {
@@ -913,12 +895,8 @@ impl Editor {
     /// Resolve unfinished input before a toolbar release can commit a restyle.
     fn prepare_style_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_gesture(window);
-        let label = self
-            .editing
-            .filter(|&i| matches!(&self.doc.annotations[i], Annotation::Text(t) if !t.content.is_empty()));
-        self.finish_text(window);
-        if label.is_some() {
-            self.selected = label;
+        if let Some(label) = self.finish_text(window) {
+            self.selected = Some(label);
         }
         window.focus(&self.focus, cx);
         self.update_cursor(window);
@@ -1114,12 +1092,24 @@ fn paint_canvas(
         });
     }
 
-    if let Some((top, height)) = overlay.caret {
-        let top = viewport.to_window(top);
+    if let Some(text) = overlay.text {
+        let (top, height) = text.caret;
         window.paint_quad(fill(
-            Bounds::new(top, size(px(1.5), px(height * viewport.scale))),
-            to_hsla(INK),
+            Bounds::new(
+                viewport.to_window(top),
+                size(px(1.5), px(height * viewport.scale)),
+            ),
+            to_hsla(text.color),
         ));
+        if let Some((start, width)) = text.composition {
+            window.paint_quad(fill(
+                Bounds::new(
+                    viewport.to_window(start),
+                    size(px(width * viewport.scale), px(1.5)),
+                ),
+                to_hsla(text.color),
+            ));
+        }
     }
 
     if let Some(crop) = overlay.crop {

@@ -5081,6 +5081,7 @@ dependencies = [
  "image",
  "snip-core",
  "tempfile",
+ "unicode-segmentation",
  "xcap",
 ]
 
