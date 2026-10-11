@@ -71,14 +71,14 @@ fn painted_outline(cx: &mut VisualTestContext, color: gpui::Hsla) -> Bounds<Pixe
     })
 }
 
-fn window_drag(cx: &mut VisualTestContext, from: gpui::Point<Pixels>, to: gpui::Point<Pixels>) {
+pub(super) fn window_drag(cx: &mut VisualTestContext, from: gpui::Point<Pixels>, to: gpui::Point<Pixels>) {
     cx.simulate_mouse_move(from, None, Modifiers::none());
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
 }
 
-fn pinch(cx: &mut VisualTestContext, position: gpui::Point<Pixels>, delta: f32) {
+pub(super) fn pinch(cx: &mut VisualTestContext, position: gpui::Point<Pixels>, delta: f32) {
     cx.simulate_mouse_move(position, None, Modifiers::none());
     cx.simulate_event(PinchEvent {
         position,
@@ -95,7 +95,7 @@ fn assert_position(actual: gpui::Point<Pixels>, expected: gpui::Point<Pixels>) {
     );
 }
 
-fn space(cx: &mut VisualTestContext, down: bool) {
+pub(super) fn space(cx: &mut VisualTestContext, down: bool) {
     let keystroke = Keystroke::parse("space").unwrap();
     if down {
         cx.simulate_event(KeyDownEvent {

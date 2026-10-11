@@ -82,7 +82,14 @@ impl Editor {
             )))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    if matches!(this.gesture, Some(Gesture::Crop(_))) {
+                        this.cancel_gesture(window);
+                        this.update_cursor(window);
+                        cx.notify();
+                    }
+                }),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.set_view(preset, window, cx)))
     }

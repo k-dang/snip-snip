@@ -77,6 +77,15 @@ rectangles have handles at their four corners. Click empty canvas to deselect.
 Each completed move, resize, deletion, or text edit undoes in one step.
 Selection outlines and handles never appear in copied or saved images.
 
+Crop keeps the original screenshot and annotations available. With Crop active,
+drag any of the four corner handles to adjust an existing crop; the opposite
+corner stays fixed, and resizing stops at a minimum of one pixel per side.
+Drag elsewhere on the image to replace the crop, or click **Clear crop** to
+restore the full image. Width and height appear in screenshot pixels while
+dragging, regardless of zoom or display scaling. Escape cancels a crop drag;
+each completed creation, adjustment, replacement, or clear undoes in one step.
+Crop handles and dimensions never appear in saved or copied images.
+
 The toolbar offers red, yellow, green, blue, and black ink, plus Thin, Medium,
 and Thick strokes. Color carries between all annotation tools; stroke width
 carries between pencil, arrow, and rectangle tools. New editors start with red

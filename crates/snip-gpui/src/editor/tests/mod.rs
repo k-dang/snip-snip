@@ -252,6 +252,7 @@ fn selection_and_no_op_style_choices_preserve_defaults_and_redo(cx: &mut TestApp
 #[gpui::test]
 fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContext) {
     let mut cx = editor(cx);
+    cx.simulate_keystrokes("c");
     for scale in [1.0, 2.0] {
         cx.simulate_scale_factor_change(scale);
         cx.simulate_resize(size(px(480.0), px(320.0)));
@@ -265,6 +266,7 @@ fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContex
             "Rectangle",
             "Text",
             "Crop",
+            "Clear crop",
             "Red",
             "Yellow",
             "Green",
@@ -779,5 +781,6 @@ fn stationary_shift_changes_during_resize_still_commit_as_one_edit(cx: &mut Test
     );
 }
 
+mod crop;
 mod text;
 mod zoom;
