@@ -5,7 +5,7 @@
 use std::{thread::sleep, time::Duration};
 
 use anyhow::{Result, bail};
-use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard as _, Mouse as _, Settings};
+use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard as _, Mouse as _, Settings};
 
 pub struct Input(Enigo);
 
@@ -71,20 +71,34 @@ impl Input {
 
     /// A left-button drag with intermediate moves.
     pub fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> Result<()> {
+        self.drag_with_preview(from, to, || Ok(()))
+    }
+
+    pub fn drag_with_preview(
+        &mut self,
+        from: (i32, i32),
+        to: (i32, i32),
+        preview: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         self.move_to(from)?;
         pause(80);
         self.0.button(Button::Left, Direction::Press)?;
         pause(80);
-        const STEPS: i32 = 24;
-        for s in 1..=STEPS {
-            self.move_to((
-                from.0 + (to.0 - from.0) * s / STEPS,
-                from.1 + (to.1 - from.1) * s / STEPS,
-            ))?;
-            pause(12);
-        }
-        pause(80);
-        self.0.button(Button::Left, Direction::Release)?;
+        let result = (|| {
+            const STEPS: i32 = 24;
+            for s in 1..=STEPS {
+                self.move_to((
+                    from.0 + (to.0 - from.0) * s / STEPS,
+                    from.1 + (to.1 - from.1) * s / STEPS,
+                ))?;
+                pause(12);
+            }
+            pause(150);
+            preview()
+        })();
+        let release = self.0.button(Button::Left, Direction::Release);
+        result?;
+        release?;
         pause(150);
         Ok(())
     }
@@ -94,6 +108,35 @@ impl Input {
         pause(80);
         self.0.button(Button::Left, Direction::Click)?;
         pause(150);
+        Ok(())
+    }
+
+    pub fn double_click(&mut self, at: (i32, i32)) -> Result<()> {
+        self.move_to(at)?;
+        self.0.button(Button::Left, Direction::Click)?;
+        pause(70);
+        self.0.button(Button::Left, Direction::Click)?;
+        pause(150);
+        Ok(())
+    }
+
+    /// Always release the held key, including when the input action fails.
+    pub fn held(&mut self, key: &str, action: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
+        let key = parse_key(key)?;
+        self.0.key(key, Direction::Press)?;
+        pause(50);
+        let result = action(self);
+        let release = self.0.key(key, Direction::Release);
+        result?;
+        release?;
+        pause(100);
+        Ok(())
+    }
+
+    pub fn scroll(&mut self, at: (i32, i32), notches: i32) -> Result<()> {
+        self.move_to(at)?;
+        self.0.scroll(notches, Axis::Vertical)?;
+        pause(250);
         Ok(())
     }
 

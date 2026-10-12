@@ -73,6 +73,52 @@ pub fn desktop_unlocked() -> Option<bool> {
     Some(desktop.map(|d| unsafe { CloseDesktop(d) }).is_ok())
 }
 
+/// Read the native cursor handle; this does not inspect editor state.
+pub fn cursor_name() -> Result<&'static str> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CURSORINFO, GetCursorInfo, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENWSE,
+        LoadCursorW,
+    };
+    let mut info = CURSORINFO {
+        cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetCursorInfo(&mut info)? };
+    for (name, resource) in [
+        ("arrow", IDC_ARROW),
+        ("crosshair", IDC_CROSS),
+        ("hand", IDC_HAND),
+        ("move", IDC_SIZEALL),
+        ("resize-nwse", IDC_SIZENWSE),
+        ("resize-nesw", IDC_SIZENESW),
+    ] {
+        if info.hCursor == unsafe { LoadCursorW(None, resource)? } {
+            return Ok(name);
+        }
+    }
+    Ok("other")
+}
+
+pub fn resize_editor(window: &xcap::Window, width: i32, height: i32) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos};
+    let hwnd = hwnd(window)?;
+    let content = content_rect(window)?;
+    let mut frame = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut frame)?;
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            width + frame.right - frame.left - content.w as i32,
+            height + frame.bottom - frame.top - content.h as i32,
+            SWP_NOMOVE | SWP_NOZORDER,
+        )?;
+    }
+    Ok(())
+}
+
 /// Locate the actual tray button and menu item with Windows accessibility,
 /// then select them using OS mouse input. Never invoke app-private commands.
 pub fn tray_menu(pid: u32, label: &str, input: &mut Input) -> Result<()> {

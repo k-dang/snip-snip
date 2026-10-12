@@ -19,7 +19,7 @@ Below, `snipctl X` is shorthand for that invocation. Cargo rebuilds it only when
 
 - **One run at a time.** The hotkey is machine-wide and input is the real mouse and keyboard, so two runs (or a user's own snip-snip) cannot coexist. `launch` refuses when any snip-snip is already running; ask the user before stopping one you did not start.
 - **The desktop is shared.** Runs move the user's cursor and type into the foreground window. Tell the user before a run so they keep hands off.
-- **Coordinates.** `snip` takes screen units (physical pixels on Windows, points on macOS) on the primary monitor; `drag`/`click` take pixels of the snipped image.
+- **Coordinates.** `snip` takes screen units (physical pixels on Windows, points on macOS) on the primary monitor. `drag`, `click`, and `double-click` map image pixels in Fit; use `key mod+0` before them. After zoom/pan, use `drag-screen`, `click-screen`, and `scroll-screen` with absolute coordinates derived from a current screenshot and `layout`.
 - **Platforms.** Windows is proven end to end. The macOS code compiles but has never run: the first Mac run must prove it, fix what breaks, and remove the warning in `snipctl/src/platform/macos.rs`. macOS needs Accessibility and Screen Recording permission for the terminal running snipctl. `mod` in chords is Ctrl on Windows and Cmd on macOS.
 
 ## Launch
@@ -54,6 +54,12 @@ The fixture gives every snip known pixels, so `inspect` turns "it looks right" i
 
 Per-feature recipes, entry points, and gotchas live in [`features/README.md`](features/README.md). Read the matching feature file before driving it.
 
+`drag X1 Y1 X2 Y2 shift` holds Shift through the gesture. `drag-screen` also
+accepts a held key, including `space` for pan. `drag-preview` captures the
+live drawing before mouse release. `hover-screen` settles the pointer before
+Windows `cursor` reads its native shape; `resize-editor` takes client-area
+dimensions. The Paint paste recipe lives in [Export](features/export.md).
+
 For the Windows shell, use `snipctl verify-shell` with no app running; it owns
 launch, restart, checks, evidence, and cleanup. Follow [App shell](features/app-shell.md)
 for its completion criteria and remaining visual review.
@@ -79,6 +85,7 @@ snipctl cleanup    # stops only the app and fixture pids this run recorded
 ```
 
 Cleanup never touches evidence; it prints the run dir it kept. After a failed step, run `cleanup` before retrying so no stray instance keeps the hotkey.
+It also stops Paint when `paint-launch` started it for this run.
 
 ## Changing snipctl
 

@@ -26,6 +26,7 @@ Preconditions:
 - **Proof.** `snipctl shot export-after-save`: the status area starts with `Saved`.
 - **Copy & Close.** `snipctl key mod+shift+c`, then `snipctl doctor`: no editor remains and the app is still healthy. `snipctl clipboard export-copy-close` and `snipctl inspect export-copy-close` must match the saved image. Start another fixture snip to prove the hotkey remains available.
 - **Cancel.** `snipctl cancel-save` opens the native picker, dismisses it, and asserts the editor stays open. `snipctl shot export-save-cancel` records the resulting editor; no PNG should have been created by cancellation.
+- **Windows application paste.** Locate Paint's installed executable, then `paint-launch EXE` starts an owned process. `paint-key ctrl+v` pastes; `paint-shot paste-view` records it. Click Paint's Crop button using `paint-click X Y` with fresh screenshot coordinates to remove excess blank canvas. `paint-key ctrl+s` opens its save dialog; `paint-key ctrl+a`, `paint-type FULL_PATH`, and `paint-key enter` save a PNG under the run directory. Compare its decoded pixels to the source clipboard PNG. Repeat after Copy & Close; before a new Paint document use `paint-key esc ctrl+n`, then send `ctrl+v` in a separate call after the new window is ready. Cleanup stops only the Paint process this run owns.
 
 ## Gotchas
 
@@ -36,3 +37,5 @@ Preconditions:
 - Clipboard readback proves payload persistence after closure, but application-paste compatibility needs a separate native paste check.
 - OS export failures have deterministic rendered-editor coverage; snipctl does not inject folder, picker, or clipboard errors. Report native failure cases as skipped unless they were actually exercised.
 - A globally reserved Ctrl+Shift+C chord may never reach the editor. Record that shortcut check as blocked; use screenshot-derived toolbar coordinates with `snipctl click` to verify the native completion action separately. In the 600x300 fixture run at 65% fit, `click -90 -57` reached Copy & Close; derive fresh coordinates when layout changes.
+- Windows `probe-shortcut ctrl+shift+c` checks the global reservation. A successful probe immediately unregisters; `AlreadyRegistered` confirms the chord is unavailable.
+- Paint's crop shortcut did not perform the action in the native run; click its visible Crop control. The Paint helper targets an English `Save as` dialog when present.
