@@ -32,8 +32,22 @@ snipctl <command> [args]
   layout                print where the editor draws the image
   key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  left  home  esc
   type TEXT...          focus the editor and type; letters, digits, spaces as keys, others as Unicode
-  drag X1 Y1 X2 Y2      focus the editor and drag between two points in image pixels
+  drag X1 Y1 X2 Y2 [KEY] focus the editor and drag in Fit image pixels, optionally holding KEY
+  drag-screen X1 Y1 X2 Y2 [KEY] drag in absolute screen units (also works after zoom/pan)
+  drag-preview X1 Y1 X2 Y2 NAME drag in Fit image pixels, screenshot before releasing the mouse
   click X Y             focus the editor and click a point in image pixels
+  double-click X Y      focus the editor and double-click in Fit image pixels
+  click-screen X Y      focus the editor and click in absolute screen units
+  hover-screen X Y      focus the editor and move the cursor without clicking
+  cursor                Windows: read the native cursor shape
+  resize-editor W H     Windows: resize the owned editor's client area
+  probe-shortcut CHORD  Windows: check global availability, releasing a successful registration
+  paint-launch EXE      Windows: start an owned Paint process for clipboard paste checks
+  paint-key COMBO...    Windows: send keys to owned Paint's current foreground window
+  paint-type TEXT       Windows: type text into owned Paint's current foreground window
+  paint-click X Y       Windows: click a screen point in owned Paint
+  paint-shot NAME       Windows: capture owned Paint and list its windows
+  scroll-screen X Y NOTCHES [KEY] scroll vertically at a screen point, optionally holding KEY
   shot NAME             save the editor window (or the primary screen) to <run>/NAME.png
   clipboard NAME        save the clipboard image to <run>/NAME.png
   save NAME             mod+s, enter <run>/NAME.png in the save dialog, wait for the file
@@ -90,8 +104,79 @@ fn dispatch(args: &[String]) -> Result<()> {
         "layout" => layout(),
         "key" => key(rest),
         "type" => type_text(&rest.join(" ")),
-        "drag" => drag(numbers(rest, 4)?),
+        "drag" | "drag-screen" => {
+            if !(4..=5).contains(&rest.len()) {
+                bail!("expected X1 Y1 X2 Y2 [KEY]");
+            }
+            drag(
+                numbers(&rest[..4], 4)?,
+                rest.get(4).map(String::as_str),
+                command == "drag-screen",
+            )
+        }
         "click" => click(numbers(rest, 2)?),
+        "drag-preview" => {
+            if rest.len() != 5 {
+                bail!("expected X1 Y1 X2 Y2 NAME");
+            }
+            drag_preview(numbers(&rest[..4], 4)?, &rest[4])
+        }
+        "double-click" => double_click(numbers(rest, 2)?),
+        "click-screen" | "hover-screen" => screen_pointer(numbers(rest, 2)?, command == "click-screen"),
+        #[cfg(windows)]
+        "cursor" => run::current()?.step(&format!("native cursor: {}", platform::cursor_name()?)),
+        #[cfg(windows)]
+        "probe-shortcut" => {
+            let chord = name(rest)?;
+            let hotkey = chord.parse::<global_hotkey::hotkey::HotKey>()?;
+            let manager = global_hotkey::GlobalHotKeyManager::new()?;
+            let result = match manager.register(hotkey) {
+                Ok(()) => {
+                    manager.unregister(hotkey)?;
+                    "available (probe released)".to_owned()
+                }
+                Err(err) => format!("unavailable: {err:?}"),
+            };
+            run::current()?.step(&format!("global shortcut {chord}: {result}"))
+        }
+        #[cfg(windows)]
+        "resize-editor" => {
+            let n = numbers(rest, 2)?;
+            if n.iter().any(|v| !v.is_finite() || *v < 1.) {
+                bail!("positive size required");
+            }
+            let run = run::current()?;
+            let window = focus_editor(&run, &mut Input::new()?)?;
+            platform::resize_editor(&window, n[0] as i32, n[1] as i32)?;
+            std::thread::sleep(Duration::from_millis(300));
+            run.step(&format!("resize editor client to {}x{}", n[0], n[1]))
+        }
+        #[cfg(windows)]
+        "paint-launch" => paint_launch(name(rest)?),
+        #[cfg(windows)]
+        "paint-key" | "paint-type" => paint_input(rest, command == "paint-type"),
+        #[cfg(windows)]
+        "paint-click" => {
+            let n = numbers(rest, 2)?;
+            let run = run::current()?;
+            let (pid, window) = paint_window(&run)?;
+            let mut input = Input::new()?;
+            platform::focus(&window, pid, &mut input)?;
+            input.click((n[0].round() as i32, n[1].round() as i32))?;
+            run.step(&format!("Paint click screen {},{}", n[0], n[1]))
+        }
+        #[cfg(windows)]
+        "paint-shot" => paint_shot(name(rest)?),
+        "scroll-screen" => {
+            if !(3..=4).contains(&rest.len()) {
+                bail!("expected X Y NOTCHES [KEY]");
+            }
+            scroll_screen(
+                numbers(&rest[..2], 2)?,
+                rest[2].parse()?,
+                rest.get(3).map(String::as_str),
+            )
+        }
         "shot" => shot(name(rest)?),
         "clipboard" => clipboard(name(rest)?),
         "save" => save(name(rest)?),
@@ -386,12 +471,102 @@ fn focus_editor(run: &Run, input: &mut Input) -> Result<xcap::Window> {
 
 fn layout() -> Result<()> {
     let run = run::current()?;
-    let l = Layout::of(&run, &screen::editor(app(&run)?)?)?;
+    let window = screen::editor(app(&run)?)?;
+    let l = Layout::of(&run, &window)?;
     println!(
         "image {}x{} drawn at screen {:?}, {} screen units per image pixel",
         l.image.0, l.image.1, l.origin, l.fit
     );
+    let content = platform::content_rect(&window)?;
+    let capture = window.capture_image()?;
+    println!(
+        "window screen {},{} {}x{}, capture {}x{}, content {},{} {}x{}",
+        window.x()?,
+        window.y()?,
+        window.width()?,
+        window.height()?,
+        capture.width(),
+        capture.height(),
+        content.x,
+        content.y,
+        content.w,
+        content.h
+    );
     Ok(())
+}
+
+#[cfg(windows)]
+fn paint_launch(exe: &str) -> Result<()> {
+    let system = sysinfo::System::new_all();
+    if system
+        .processes()
+        .values()
+        .any(|p| p.name().to_string_lossy().eq_ignore_ascii_case("mspaint.exe"))
+    {
+        bail!("Paint is already running; use a fresh owned session");
+    }
+    let run = run::current()?;
+    let pid = run.spawn("paint", &mut Command::new(exe))?;
+    wait_for("the owned Paint window", Duration::from_secs(15), || {
+        Ok((!screen::windows_of(pid)?.is_empty()).then_some(()))
+    })?;
+    run.step(&format!("launched owned Paint pid {pid}"))
+}
+
+#[cfg(windows)]
+fn paint_window(run: &Run) -> Result<(u32, xcap::Window)> {
+    let pid = run.owned("paint").context("no owned Paint process")?;
+    let windows = screen::windows_of(pid)?;
+    if let Some(dialog) = windows.iter().find(|w| w.title().is_ok_and(|t| t == "Save as")) {
+        return Ok((pid, dialog.clone()));
+    }
+    for window in &windows {
+        if platform::is_focused(window)? {
+            return Ok((pid, window.clone()));
+        }
+    }
+    let window = windows
+        .into_iter()
+        .max_by_key(|w| w.width().unwrap_or(0) * w.height().unwrap_or(0))
+        .context("no owned Paint window")?;
+    Ok((pid, window))
+}
+
+#[cfg(windows)]
+fn paint_input(args: &[String], text: bool) -> Result<()> {
+    let run = run::current()?;
+    let (pid, window) = paint_window(&run)?;
+    let mut input = Input::new()?;
+    platform::focus(&window, pid, &mut input)?;
+    if text {
+        input.text(&args.join(" "))?;
+    } else {
+        for key in args {
+            input.chord(key)?;
+        }
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    run.step(&format!("Paint {} {args:?}", if text { "type" } else { "key" }))
+}
+
+#[cfg(windows)]
+fn paint_shot(name: &str) -> Result<()> {
+    let run = run::current()?;
+    let (pid, window) = paint_window(&run)?;
+    let path = run.path(&format!("{name}.png"));
+    window.capture_image()?.save(&path)?;
+    let titles: Vec<_> = screen::windows_of(pid)?
+        .iter()
+        .filter_map(|w| w.title().ok())
+        .collect();
+    run.step(&format!(
+        "Paint shot {}, windows={titles:?}, window screen {},{} {}x{}",
+        path.display(),
+        window.x()?,
+        window.y()?,
+        window.width()?,
+        window.height()?
+    ))
 }
 
 fn key(combos: &[String]) -> Result<()> {
@@ -414,17 +589,91 @@ fn type_text(text: &str) -> Result<()> {
     run.step(&format!("type {text:?}"))
 }
 
-fn drag(n: Vec<f32>) -> Result<()> {
+fn drag(n: Vec<f32>, held: Option<&str>, absolute: bool) -> Result<()> {
+    let run = run::current()?;
+    let mut input = Input::new()?;
+    let window = focus_editor(&run, &mut input)?;
+    let (a, b) = if absolute {
+        (
+            (n[0].round() as i32, n[1].round() as i32),
+            (n[2].round() as i32, n[3].round() as i32),
+        )
+    } else {
+        let layout = Layout::of(&run, &window)?;
+        (layout.to_screen((n[0], n[1])), layout.to_screen((n[2], n[3])))
+    };
+    if let Some(key) = held {
+        input.held(key, |input| input.drag(a, b))?;
+    } else {
+        input.drag(a, b)?;
+    }
+    input.park()?;
+    run.step(&format!(
+        "drag ({},{})->({},{}) = screen {a:?}->{b:?}, held={held:?}, absolute={absolute}",
+        n[0], n[1], n[2], n[3]
+    ))
+}
+
+fn double_click(n: Vec<f32>) -> Result<()> {
     let run = run::current()?;
     let mut input = Input::new()?;
     let layout = Layout::of(&run, &focus_editor(&run, &mut input)?)?;
+    let at = layout.to_screen((n[0], n[1]));
+    input.double_click(at)?;
+    input.park()?;
+    run.step(&format!("double-click image ({},{}) = screen {at:?}", n[0], n[1]))
+}
+
+fn drag_preview(n: Vec<f32>, name: &str) -> Result<()> {
+    let run = run::current()?;
+    let mut input = Input::new()?;
+    let window = focus_editor(&run, &mut input)?;
+    let layout = Layout::of(&run, &window)?;
     let (a, b) = (layout.to_screen((n[0], n[1])), layout.to_screen((n[2], n[3])));
-    input.drag(a, b)?;
+    let path = run.path(&format!("{name}.png"));
+    input.drag_with_preview(a, b, || screen::shot(app(&run)?, &path))?;
     input.park()?;
     run.step(&format!(
-        "drag image ({},{})->({},{}) = screen {a:?}->{b:?}",
-        n[0], n[1], n[2], n[3]
+        "drag screen {a:?}->{b:?}, held-button preview {}",
+        path.display()
     ))
+}
+
+fn screen_pointer(n: Vec<f32>, click: bool) -> Result<()> {
+    let run = run::current()?;
+    let mut input = Input::new()?;
+    focus_editor(&run, &mut input)?;
+    let at = (n[0].round() as i32, n[1].round() as i32);
+    if click {
+        input.click(at)?;
+        input.park()?;
+    } else {
+        // Approach and settle within the same hit region, as a real pointer
+        // movement does. Windows applies WM_SETCURSOR before GPUI handles
+        // the first move's newly selected cursor.
+        input.move_to((at.0 - 1, at.1))?;
+        std::thread::sleep(Duration::from_millis(100));
+        input.move_to(at)?;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    run.step(&format!(
+        "{} screen {at:?}",
+        if click { "click" } else { "hover" }
+    ))
+}
+
+fn scroll_screen(n: Vec<f32>, notches: i32, held: Option<&str>) -> Result<()> {
+    let run = run::current()?;
+    let mut input = Input::new()?;
+    focus_editor(&run, &mut input)?;
+    let at = (n[0].round() as i32, n[1].round() as i32);
+    if let Some(key) = held {
+        input.held(key, |input| input.scroll(at, notches))?;
+    } else {
+        input.scroll(at, notches)?;
+    }
+    input.park()?;
+    run.step(&format!("scroll screen {at:?}, notches={notches}, held={held:?}"))
 }
 
 fn click(n: Vec<f32>) -> Result<()> {
@@ -513,7 +762,7 @@ fn close() -> Result<()> {
 
 fn cleanup() -> Result<()> {
     let run = run::current()?;
-    for name in ["app", "fixture"] {
+    for name in ["app", "fixture", "paint"] {
         if let Some(pid) = run.stop(name)? {
             println!("stopped {name} pid {pid}");
         }

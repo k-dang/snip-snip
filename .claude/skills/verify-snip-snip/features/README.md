@@ -11,7 +11,7 @@ The maintained source for verifying snip-snip's user-facing behavior. Read this 
 ## Driving conventions
 
 - Every action goes through `snipctl`; it logs each step to `<run>/steps.log`.
-- Image coordinates for `drag`/`click` are pixels of the snipped image, origin top-left.
+- Image coordinates for `drag`/`click`/`double-click` are pixels of the snipped image in Fit, origin top-left. Reset with `key mod+0`; after navigation use absolute `*-screen` commands instead.
 - A `click` outside those bounds can target the toolbar. Derive its coordinates from a current screenshot and `layout`, and record the action and resulting behavior; toolbar coordinates vary with wrapping.
 - Expected `inspect` counts in the recipes were measured on Windows at 100% scaling, where one screen unit is one image pixel. `snip` prints the image size it expects; on a 2x display, sizes double and counts quadruple.
 - Prefer keyboard shortcuts (`p a r t c`, `mod+…`) to toolbar clicks: the toolbar has no accessibility handles, so keys are the stable handle.
@@ -33,6 +33,7 @@ Each feature file has an H1 title, one paragraph of user-visible behavior, then 
 - [Snip](./snip.md): hotkey, frozen overlay, region selection, cancel.
 - [App shell](./app-shell.md): tray/menu-bar controls, Settings, capture shortcut, Quit.
 - [Annotate](./annotate.md): pencil, arrow, rectangle, text.
+- [Navigation](./navigation.md): wheel zoom, Space-pan, Fit/100%, resizing, and zoomed editing.
 - [Crop](./crop.md): crop to a sub-rectangle, applied to exports.
 - [Undo and redo](./undo-redo.md): history across annotations and crop.
 - [Export](./export.md): copy, copy and close, save defaults, PNG export, and failure handling.

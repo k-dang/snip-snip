@@ -43,7 +43,7 @@ pub fn editor(pid: u32) -> Result<xcap::Window> {
     titled(pid, EDITOR_TITLE)?.context("no editor window is open")
 }
 
-/// Where the editor paints the image. Mirrors crates/snip-gpui/src/editor.rs:
+/// Where the editor paints the image in Fit. Mirrors crates/snip-gpui/src/editor.rs:
 /// 16 px canvas padding below the toolbar, the image centered and never more
 /// than one image pixel per device pixel. All lengths there are logical px.
 /// The toolbar wraps on narrow windows, so its height is measured instead.
@@ -95,17 +95,41 @@ const TOOLBAR_BORDER: [u8; 3] = [0x33, 0x33, 0x36];
 /// The screen y just below the toolbar: the first window row that is mostly
 /// the toolbar's 1 px bottom border.
 fn toolbar_bottom(window: &xcap::Window) -> Result<f32> {
-    let capture = window.capture_image()?;
-    let per_unit = capture.width() as f32 / window.width()? as f32;
-    let row = (0..capture.height())
-        .find(|&y| {
-            let border = (0..capture.width())
-                .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
-                .count();
-            border as f32 >= 0.8 * capture.width() as f32
-        })
-        .context("no toolbar border in the editor window")?;
-    Ok(window.y()? as f32 + (row + 1) as f32 / per_unit)
+    #[cfg(windows)]
+    {
+        // Window captures can omit invisible frame pixels even when xcap's
+        // reported bounds include them. Scan actual screen pixels instead.
+        let monitor = window.current_monitor()?;
+        let capture = monitor.capture_image()?;
+        let content = platform::content_rect(window)?;
+        let left = (content.x - monitor.x()? as f32).max(0.) as u32;
+        let top = (content.y - monitor.y()? as f32).max(0.) as u32;
+        let right = (left + content.w as u32).min(capture.width());
+        let bottom = (top + content.h as u32).min(capture.height());
+        let row = (top..bottom)
+            .find(|&y| {
+                let border = (left..right)
+                    .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
+                    .count();
+                border as f32 >= 0.8 * (right - left) as f32
+            })
+            .context("no toolbar border in the editor screen pixels")?;
+        Ok(monitor.y()? as f32 + (row + 1) as f32)
+    }
+    #[cfg(not(windows))]
+    {
+        let capture = window.capture_image()?;
+        let per_unit = capture.width() as f32 / window.width()? as f32;
+        let row = (0..capture.height())
+            .find(|&y| {
+                let border = (0..capture.width())
+                    .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
+                    .count();
+                border as f32 >= 0.8 * capture.width() as f32
+            })
+            .context("no toolbar border in the editor window")?;
+        Ok(window.y()? as f32 + (row + 1) as f32 / per_unit)
+    }
 }
 
 /// Screenshots the editor window, or the primary monitor when none is open.
