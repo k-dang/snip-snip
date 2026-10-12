@@ -7,6 +7,8 @@ mod input;
 mod platform;
 mod run;
 mod screen;
+#[cfg(windows)]
+mod verify_shell;
 
 use std::{fs, path::Path, process::Command, time::Duration};
 
@@ -20,9 +22,12 @@ const USAGE: &str = "\
 snipctl <command> [args]
 
   launch                start target/release/snip-snip in a new run dir; waits for ready
+  verify-shell [CHORD]  Windows shell scenario, evidence + cleanup; default ctrl+alt+k
   doctor                read-only health check of the current run
   target                show the fixture (blue|green halves) at screen 100,100 size 800x500
-  snip X Y W H          Alt+Shift+S, drag that screen rect on the overlay, wait for the editor
+  snip X Y W H [CHORD]  capture with CHORD (default Alt+Shift+S), drag, wait for editor
+  shell-menu ITEM       Windows tray menu: new-snip, settings, quit
+  shell-key COMBO...    focus Settings if open, then send real keyboard input
   cancel-snip           Alt+Shift+S, then Esc on the overlay; asserts no editor opens
   layout                print where the editor draws the image
   key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  left  home  esc
@@ -54,11 +59,33 @@ fn dispatch(args: &[String]) -> Result<()> {
         .map(|(c, r)| (c.as_str(), r))
         .unwrap_or(("help", &[]));
     match command {
+        "verify-shell" => {
+            #[cfg(windows)]
+            {
+                if rest.len() > 1 {
+                    bail!("expected at most one test chord");
+                }
+                verify_shell::verify(rest.first().map(String::as_str).unwrap_or("ctrl+alt+k"))
+            }
+            #[cfg(not(windows))]
+            bail!("verify-shell currently requires Windows tray automation")
+        }
         "launch" => launch(),
         "doctor" => doctor(),
         "target" => target(),
         "fixture-window" => fixture::run(),
-        "snip" => snip(numbers(rest, 4)?),
+        "snip" => {
+            if !(4..=5).contains(&rest.len()) {
+                bail!("expected X Y W H [CHORD]");
+            }
+            snip(
+                numbers(&rest[..4], 4)?,
+                rest.get(4).map(String::as_str).unwrap_or("alt+shift+s"),
+            )
+        }
+        #[cfg(windows)]
+        "shell-menu" => shell_menu(name(rest)?),
+        "shell-key" => shell_key(rest),
         "cancel-snip" => cancel_snip(),
         "layout" => layout(),
         "key" => key(rest),
@@ -99,6 +126,17 @@ fn app(run: &Run) -> Result<u32> {
 }
 
 fn launch() -> Result<()> {
+    let exe = check_launch()?;
+    let run = run::start()?;
+    launch_app(&run, &exe)
+}
+
+#[cfg(windows)]
+fn launch_in(run: &Run) -> Result<()> {
+    launch_app(run, &check_launch()?)
+}
+
+fn check_launch() -> Result<std::path::PathBuf> {
     let exe = run::app_exe();
     if !exe.exists() {
         bail!(
@@ -109,11 +147,14 @@ fn launch() -> Result<()> {
     let others = run::snip_snip_pids();
     if !others.is_empty() {
         bail!(
-            "snip-snip already running (pid {others:?}); it owns Alt+Shift+S. Ask the user before stopping it."
+            "snip-snip already running (pid {others:?}); it owns the capture shortcut. Ask the user before stopping it."
         );
     }
-    let run = run::start()?;
-    let pid = run.spawn("app", &mut Command::new(&exe))?;
+    Ok(exe)
+}
+
+fn launch_app(run: &Run, exe: &Path) -> Result<()> {
+    let pid = run.spawn("app", &mut Command::new(exe))?;
     wait_for("the ready line", Duration::from_secs(10), || {
         let log = run.app_log();
         if log.contains("snip-snip running") {
@@ -230,9 +271,9 @@ fn target() -> Result<()> {
 }
 
 /// Presses the hotkey and waits for the overlay's first frame.
-fn open_overlay(run: &Run, input: &mut Input) -> Result<()> {
+fn open_overlay(run: &Run, input: &mut Input, chord: &str) -> Result<()> {
     let frames = run.count_in_log("overlay first frame");
-    input.chord("alt+shift+s")?;
+    input.chord(chord)?;
     wait_for("the overlay", Duration::from_secs(10), || {
         Ok((run.count_in_log("overlay first frame") > frames).then_some(()))
     })?;
@@ -240,7 +281,7 @@ fn open_overlay(run: &Run, input: &mut Input) -> Result<()> {
     Ok(())
 }
 
-fn snip(n: Vec<f32>) -> Result<()> {
+fn snip(n: Vec<f32>, chord: &str) -> Result<()> {
     let run = run::current()?;
     let pid = app(&run)?;
     if screen::titled(pid, screen::EDITOR_TITLE)?.is_some() {
@@ -248,7 +289,7 @@ fn snip(n: Vec<f32>) -> Result<()> {
     }
     let [x, y, w, h] = [n[0] as i32, n[1] as i32, n[2] as i32, n[3] as i32];
     let mut input = Input::new()?;
-    open_overlay(&run, &mut input)?;
+    open_overlay(&run, &mut input, chord)?;
     // The overlay's selection includes the pixels under both drag ends.
     input.drag((x, y), (x + w - 1, y + h - 1))?;
     wait_for("the editor window", Duration::from_secs(10), || {
@@ -276,7 +317,7 @@ fn cancel_snip() -> Result<()> {
     let run = run::current()?;
     let pid = app(&run)?;
     let mut input = Input::new()?;
-    open_overlay(&run, &mut input)?;
+    open_overlay(&run, &mut input, "alt+shift+s")?;
     input.chord("esc")?;
     wait_for("the overlay to close", Duration::from_secs(5), || {
         Ok(screen::titled(pid, OVERLAY_TITLE)?.is_none().then_some(()))
@@ -286,6 +327,53 @@ fn cancel_snip() -> Result<()> {
         bail!("an editor opened after Esc");
     }
     run.step("overlay opened and closed on Esc; no editor")
+}
+
+#[cfg(windows)]
+fn shell_menu(item: &str) -> Result<()> {
+    let run = run::current()?;
+    let pid = app(&run)?;
+    let label = match item {
+        "new-snip" => "New snip",
+        "settings" => "Settings",
+        "quit" => "Quit",
+        _ => bail!("expected new-snip, settings, or quit"),
+    };
+    let frames = run.count_in_log("overlay first frame");
+    platform::tray_menu(pid, label, &mut Input::new()?)?;
+    match item {
+        "new-snip" => {
+            wait_for("the menu capture overlay", Duration::from_secs(10), || {
+                Ok((run.count_in_log("overlay first frame") > frames).then_some(()))
+            })?;
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        "settings" => {
+            wait_for("Settings", Duration::from_secs(5), || {
+                screen::titled(pid, "snip-snip Settings")
+            })?;
+        }
+        "quit" => {
+            wait_for("the app to quit", Duration::from_secs(5), || {
+                Ok(run.owned("app").is_none().then_some(()))
+            })?;
+        }
+        _ => unreachable!(),
+    }
+    run.step(&format!("selected tray menu {label}"))
+}
+
+fn shell_key(chords: &[String]) -> Result<()> {
+    let run = run::current()?;
+    let pid = app(&run)?;
+    let mut input = Input::new()?;
+    if let Some(settings) = screen::titled(pid, "snip-snip Settings")? {
+        platform::focus(&settings, pid, &mut input)?;
+    }
+    for chord in chords {
+        input.chord(chord)?;
+    }
+    run.step(&format!("sent shell keys {}", chords.join(" ")))
 }
 
 /// Focuses the editor so keys reach it, returning its window.

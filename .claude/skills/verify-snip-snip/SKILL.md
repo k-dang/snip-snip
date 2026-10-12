@@ -5,7 +5,7 @@ description: Drive the real snip-snip desktop app (global hotkey, capture overla
 
 # Verify snip-snip
 
-snip-snip is a background GPUI app with no window until `Alt+Shift+S`. A user presses the hotkey, drags a region on the frozen-screen overlay, annotates in the editor, then copies or saves. Every step here drives that same path with injected OS input: the real hotkey, the real overlay, the real save dialog.
+snip-snip is a background GPUI app with a tray/menu-bar icon and a configurable capture shortcut, initially `Alt+Shift+S`. A user presses the hotkey, drags a region on the frozen-screen overlay, annotates in the editor, then copies or saves. Every step here drives that same path with injected OS input: the real hotkey, the real overlay, the real save dialog. For tray controls and shortcut configuration, read [App shell](features/app-shell.md).
 
 All driving goes through `snipctl`, a Rust CLI in `snipctl/` next to this file (its own Cargo project, outside the product workspace). From the repo root:
 
@@ -53,6 +53,10 @@ snipctl close
 The fixture gives every snip known pixels, so `inspect` turns "it looks right" into numbers: on Windows at 100% the snip above yields `600x300 blue=90000 green=90000`, and annotations add `ink`. Snip without `target` to capture whatever is on screen.
 
 Per-feature recipes, entry points, and gotchas live in [`features/README.md`](features/README.md). Read the matching feature file before driving it.
+
+For the Windows shell, use `snipctl verify-shell` with no app running; it owns
+launch, restart, checks, evidence, and cleanup. Follow [App shell](features/app-shell.md)
+for its completion criteria and remaining visual review.
 
 ## Evidence
 

@@ -1,65 +1,28 @@
-//! snip-snip GPUI feasibility spike.
-//!
-//! Runs in the background; press Alt+Shift+S to freeze every monitor, drag a
-//! region, and annotate it in the editor. Timings are logged to stderr.
+//! Screenshot capture and annotation, available through the native tray/menu bar.
 
 mod capture;
 mod drag;
 mod editor;
 mod overlay;
+mod shell;
 
-use anyhow::{Context as _, Result};
-use futures::StreamExt;
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey, Modifiers},
-};
 use gpui::{App, QuitMode};
 
 fn main() {
-    // Keep running with no windows open; the app lives in the background
-    // waiting for the hotkey.
     gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)
         .run(|cx: &mut App| {
-            if let Err(err) = run(cx) {
-                eprintln!("snip-snip: {err:#}");
-                cx.quit();
+            // The editor and Settings activate the app on macOS; closing its
+            // last window gives focus back while leaving the shell running.
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.hide();
+                }
+            })
+            .detach();
+            if let Err(error) = shell::start(cx) {
+                eprintln!("snip-snip: {error:#}");
+                shell::show_startup_error(format!("{error:#}"), cx);
             }
         });
-}
-
-fn run(cx: &mut App) -> Result<()> {
-    let manager = GlobalHotKeyManager::new().context("creating hotkey manager")?;
-    let hotkey = HotKey::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyS);
-    manager.register(hotkey).context("registering Alt+Shift+S")?;
-
-    // The handler runs on the platform event loop; forward presses to a GPUI
-    // task so snipping runs with full app access and no polling.
-    let (tx, mut presses) = futures::channel::mpsc::unbounded();
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state == HotKeyState::Pressed {
-            tx.unbounded_send(std::time::Instant::now()).ok();
-        }
-    }));
-    cx.spawn(async move |cx| {
-        let _manager = manager; // dropping it unregisters the hotkey
-        while let Some(pressed) = presses.next().await {
-            eprintln!("snip: hotkey delivered after {:?}", pressed.elapsed());
-            cx.update(overlay::start);
-        }
-    })
-    .detach();
-
-    // The editor activates the app on macOS; once its last window closes, give
-    // focus back to the app that was in use before the snip.
-    cx.on_window_closed(|cx, _| {
-        if cx.windows().is_empty() {
-            cx.hide();
-        }
-    })
-    .detach();
-
-    eprintln!("snip-snip running; press Alt+Shift+S to snip");
-    Ok(())
 }

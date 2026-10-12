@@ -37,5 +37,9 @@ picked up.
    Ctrl+Shift+C is reserved globally on the verification machine, so native
    shortcut delivery remains outstanding, as do macOS and clipboard paste
    into another app.
-8. **App shell:** a tray/menu-bar icon, launch at login, and a configurable
-   hotkey.
+8. **App shell (implemented):** a native tray/menu-bar icon with New snip,
+   Settings, and Quit, plus a persistent configurable hotkey and visible
+   failure recovery. Automated checks pass; Windows shell controls, shortcut
+   replacement/restart, menu dismissal before capture, and Quit were verified
+   natively. Combined Save flow toolbar Copy & Close, clipboard readback, and
+   another capture also pass on Windows. macOS checks remain outstanding.

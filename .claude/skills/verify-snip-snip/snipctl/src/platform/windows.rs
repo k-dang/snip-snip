@@ -32,6 +32,10 @@ fn hwnd(window: &xcap::Window) -> Result<HWND> {
     Ok(HWND(window.id()? as usize as *mut _))
 }
 
+pub fn is_focused(window: &xcap::Window) -> Result<bool> {
+    Ok(unsafe { GetForegroundWindow() } == hwnd(window)?)
+}
+
 /// The window's client area (below the native title bar) in screen pixels.
 pub fn content_rect(window: &xcap::Window) -> Result<screen::Rect> {
     let hwnd = hwnd(window)?;
@@ -69,6 +73,96 @@ pub fn desktop_unlocked() -> Option<bool> {
     Some(desktop.map(|d| unsafe { CloseDesktop(d) }).is_ok())
 }
 
+/// Locate the actual tray button and menu item with Windows accessibility,
+/// then select them using OS mouse input. Never invoke app-private commands.
+pub fn tray_menu(pid: u32, label: &str, input: &mut Input) -> Result<()> {
+    use windows::Win32::{
+        System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx},
+        UI::Accessibility::*,
+        UI::WindowsAndMessaging::{FindWindowW, IsWindowVisible},
+    };
+    use windows::core::w;
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+    }
+    let automation: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)? };
+    let root = unsafe { automation.GetRootElement()? };
+    let point = |property, value: &str| -> Result<Option<(i32, i32)>> {
+        let condition = unsafe { automation.CreatePropertyCondition(property, &value.into())? };
+        // Query live Explorer surfaces rather than every app's accessibility
+        // tree. Reacquire the overflow root after opening it.
+        for class in [
+            w!("Shell_TrayWnd"),
+            w!("TopLevelWindowForOverflowXamlIsland"),
+            w!("NotifyIconOverflowWindow"),
+        ] {
+            let Ok(window) = (unsafe { FindWindowW(class, None) }) else {
+                continue;
+            };
+            if !unsafe { IsWindowVisible(window).as_bool() } {
+                continue;
+            }
+            let surface = unsafe { automation.ElementFromHandle(window)? };
+            let controls = unsafe { surface.FindAll(TreeScope_Descendants, &condition)? };
+            for index in 0..unsafe { controls.Length()? } {
+                let control = unsafe { controls.GetElement(index)? };
+                if unsafe { control.CurrentIsOffscreen()? }.as_bool() {
+                    continue;
+                }
+                let rect = unsafe { control.CurrentBoundingRectangle()? };
+                if rect.right > rect.left
+                    && rect.bottom > rect.top
+                    && rect.right - rect.left <= 64
+                    && rect.bottom - rect.top <= 64
+                {
+                    return Ok(Some(((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)));
+                }
+            }
+        }
+        Ok(None)
+    };
+    if point(UIA_NamePropertyId, "snip-snip")?.is_none() {
+        let overflow = match point(UIA_AutomationIdPropertyId, "SystemTray.OverflowButton")? {
+            Some(point) => point,
+            None => point(UIA_NamePropertyId, "Show Hidden Icons")?
+                .context("tray icon and overflow button not found")?,
+        };
+        input.click(overflow)?;
+    }
+    let icon = wait_for("the snip-snip tray button", Duration::from_secs(3), || {
+        point(UIA_NamePropertyId, "snip-snip")
+    })?;
+    input.click(icon)?;
+    let name = unsafe { automation.CreatePropertyCondition(UIA_NamePropertyId, &label.into())? };
+    let process =
+        unsafe { automation.CreatePropertyCondition(UIA_ProcessIdPropertyId, &(pid as i32).into())? };
+    let condition = unsafe { automation.CreateAndCondition(&name, &process)? };
+    let item = wait_for("the tray menu item", Duration::from_secs(3), || {
+        let Ok(item) = (unsafe { root.FindFirst(TreeScope_Descendants, &condition) }) else {
+            return Ok(None);
+        };
+        if unsafe { item.CurrentIsOffscreen()? }.as_bool() {
+            return Ok(None);
+        }
+        let rect = unsafe { item.CurrentBoundingRectangle()? };
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            return Ok(None);
+        }
+        let point = POINT {
+            x: (rect.left + rect.right) / 2,
+            y: (rect.top + rect.bottom) / 2,
+        };
+        // Accessibility geometry may arrive before the native menu finishes
+        // opening. Click only when hit testing finds this actual menu item.
+        let hit = unsafe { automation.ElementFromPoint(point)? };
+        Ok(
+            (unsafe { hit.CurrentName()? } == label && unsafe { hit.CurrentProcessId()? } == pid as i32)
+                .then_some((point.x, point.y)),
+        )
+    })?;
+    input.click(item)
+}
+
 /// The clipboard's format names, e.g. `PNG`, `CF_DIBV5`.
 pub fn clipboard_formats() -> Result<Vec<String>> {
     use clipboard_win::{Clipboard, raw};
@@ -87,8 +181,9 @@ pub fn clipboard_formats() -> Result<Vec<String>> {
 fn save_dialog(pid: u32) -> Result<xcap::Window> {
     wait_for("the save dialog", Duration::from_secs(10), || {
         Ok(screen::windows_of(pid)?.into_iter().find(|w| {
-            w.title()
-                .is_ok_and(|t| t != screen::EDITOR_TITLE && t != screen::OVERLAY_TITLE)
+            w.title().is_ok_and(|t| {
+                t != screen::EDITOR_TITLE && t != screen::OVERLAY_TITLE && t != "snip-snip Settings"
+            })
         }))
     })
 }
