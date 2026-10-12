@@ -15,21 +15,18 @@ struct NativeState {
     captures: usize,
     conflicts: HashSet<HotKey>,
     released: bool,
-    unsupported_layout: bool,
-    layout_rejections: usize,
+    recorded: Option<HotKey>,
     fail_release: Option<HotKey>,
 }
 
 struct TestPlatform(Rc<RefCell<NativeState>>);
 
 impl ShellPlatform for TestPlatform {
-    fn check_keyboard_layout(&self, _: &App) -> Result<()> {
-        let mut state = self.0.borrow_mut();
-        if state.unsupported_layout {
-            state.layout_rejections += 1;
-            bail!("Unsupported keyboard layout; use New snip or switch layouts");
+    fn record_shortcut(&self, key: &gpui::Keystroke) -> Result<HotKey> {
+        match self.0.borrow().recorded {
+            Some(shortcut) => Ok(shortcut),
+            None => super::shortcut::record(key),
         }
-        Ok(())
     }
     fn dismiss_menu(&mut self) -> Result<()> {
         Ok(())
@@ -57,85 +54,14 @@ impl ShellPlatform for TestPlatform {
 }
 
 #[gpui::test]
-fn layout_changes_cancel_recording_and_keep_menu_capture_available(cx: &mut TestAppContext) {
-    let folder = tempfile::tempdir().unwrap();
-    let native = Rc::new(RefCell::new(NativeState::default()));
-    let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| {
-        super::install(
-            Box::new(TestPlatform(native.clone())),
-            folder.path().join("shortcut"),
-            rx,
-            cx,
-        )
-    });
-    tx.unbounded_send(ShellEvent::Settings).unwrap();
-    cx.run_until_parked();
-    let window = cx.update(|cx| cx.windows()[0]);
-    let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
-    native.borrow_mut().unsupported_layout = true;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
-    view.run_until_parked();
-    assert!(view.debug_bounds(UNAVAILABLE_DEFAULT).is_some());
-    assert!(view.debug_bounds("Press a shortcut; Escape cancels").is_none());
-    tx.unbounded_send(ShellEvent::NewSnip).unwrap();
-    view.run_until_parked();
-    view.executor().advance_clock(std::time::Duration::from_secs(1));
-    view.run_until_parked();
-    assert_eq!(native.borrow().captures, 1);
-    native.borrow_mut().unsupported_layout = false;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
-    view.run_until_parked();
-    assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
-}
-
-#[gpui::test(iterations = 32)]
-fn returning_to_a_supported_layout_during_same_chord_rollback_recovers(cx: &mut TestAppContext) {
+fn recording_uses_the_physical_key_returned_by_the_platform(cx: &mut TestAppContext) {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("shortcut");
-    std::fs::write(&path, "alt+shift+s").unwrap();
-    let chord: HotKey = "alt+shift+s".parse().unwrap();
-    let native = Rc::new(RefCell::new(NativeState::default()));
-    native.borrow_mut().conflicts.insert(chord);
-    let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
-    cx.run_until_parked();
-    let window = cx.update(|cx| cx.windows()[0]);
-    let mut view = VisualTestContext::from_window(window, cx);
-    native.borrow_mut().conflicts.clear();
-    click(&mut view, "Record shortcut");
-    view.simulate_keystrokes("alt-shift-s tab");
-    view.cx
-        .dispatch_keystroke(window, gpui::Keystroke::parse("enter").unwrap());
-    native.borrow_mut().unsupported_layout = true;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
-    // Pause after the native layout event and pending Apply have observed the
-    // unsupported layout, while preference rollback is still scheduled.
-    while native.borrow().layout_rejections < 2 {
-        assert!(view.executor().tick(), "pending layout checks must finish");
-    }
-    native.borrow_mut().unsupported_layout = false;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
-    view.run_until_parked();
-    assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "alt+shift+s");
-    assert_eq!(native.borrow().registered, HashSet::from([chord]));
-    tx.unbounded_send(ShellEvent::Hotkey {
-        id: chord.id(),
-        pressed: true,
-    })
-    .unwrap();
-    view.run_until_parked();
-    assert_eq!(native.borrow().captures, 1);
-}
-
-#[gpui::test]
-fn a_layout_change_during_apply_restores_settings_and_disables_both_chords(cx: &mut TestAppContext) {
-    let folder = tempfile::tempdir().unwrap();
-    let path = folder.path().join("shortcut");
-    std::fs::write(&path, "alt+shift+s").unwrap();
-    let native = Rc::new(RefCell::new(NativeState::default()));
+    let physical: HotKey = "ctrl+alt+q".parse().unwrap();
+    let native = Rc::new(RefCell::new(NativeState {
+        recorded: Some(physical),
+        ..Default::default()
+    }));
     let (tx, rx) = mpsc::unbounded();
     cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
     tx.unbounded_send(ShellEvent::Settings).unwrap();
@@ -143,30 +69,25 @@ fn a_layout_change_during_apply_restores_settings_and_disables_both_chords(cx: &
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
     click(&mut view, "Record shortcut");
-    view.simulate_keystrokes("ctrl-alt-k tab");
-    view.cx
-        .dispatch_keystroke(window, gpui::Keystroke::parse("enter").unwrap());
-    native.borrow_mut().unsupported_layout = true;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
+    // An alternate layout reports A for the physical U.S. Q position.
+    view.simulate_keystrokes("ctrl-alt-a");
+    let proposed = if cfg!(target_os = "macos") {
+        "Proposed: Ctrl+Option+Q"
+    } else {
+        "Proposed: Ctrl+Alt+Q"
+    };
+    assert!(view.debug_bounds(proposed).is_some());
+    click(&mut view, "Apply");
     view.run_until_parked();
-    assert!(view.debug_bounds(UNAVAILABLE_DEFAULT).is_some());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "alt+shift+s");
-    assert!(native.borrow().registered.is_empty());
+    assert_eq!(native.borrow().registered, HashSet::from([physical]));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), physical.to_string());
     tx.unbounded_send(ShellEvent::Hotkey {
-        id: "ctrl+alt+k".parse::<HotKey>().unwrap().id(),
+        id: physical.id(),
         pressed: true,
     })
     .unwrap();
     view.run_until_parked();
-    assert_eq!(native.borrow().captures, 0);
-    native.borrow_mut().unsupported_layout = false;
-    tx.unbounded_send(ShellEvent::KeyboardLayoutChanged).unwrap();
-    view.run_until_parked();
-    assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
-    assert_eq!(
-        native.borrow().registered,
-        HashSet::from(["alt+shift+s".parse().unwrap()])
-    );
+    assert_eq!(native.borrow().captures, 1);
 }
 
 #[gpui::test]
@@ -206,7 +127,7 @@ fn unreadable_but_replaceable_settings_can_be_repaired_through_apply(cx: &mut Te
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("shortcut");
     std::fs::write(&path, "alt+shift+s").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
     cx.update(|cx| super::install(Box::new(TestPlatform(native)), path.clone(), rx, cx));

@@ -20,7 +20,12 @@ Below, `snipctl X` is shorthand for that invocation. Cargo rebuilds it only when
 - **One run at a time.** The hotkey is machine-wide and input is the real mouse and keyboard, so two runs (or a user's own snip-snip) cannot coexist. `launch` refuses when any snip-snip is already running; ask the user before stopping one you did not start.
 - **The desktop is shared.** Runs move the user's cursor and type into the foreground window. Tell the user before a run so they keep hands off.
 - **Coordinates.** `snip` takes screen units (physical pixels on Windows, points on macOS) on the primary monitor. `drag`, `click`, and `double-click` map image pixels in Fit; use `key mod+0` before them. After zoom/pan, use `drag-screen`, `click-screen`, and `scroll-screen` with absolute coordinates derived from a current screenshot and `layout`.
-- **Platforms.** Windows is proven end to end. The macOS code compiles but has never run: the first Mac run must prove it, fix what breaks, and remove the warning in `snipctl/src/platform/macos.rs`. macOS needs Accessibility and Screen Recording permission for the terminal running snipctl. `mod` in chords is Ctrl on Windows and Cmd on macOS.
+- **Platforms.** Windows is proven end to end. macOS physical shortcuts,
+  recording, restart persistence, capture, and clipboard readback have native
+  proof on Canadian and Dvorak input sources. The full macOS feature pass and
+  save-panel automation remain outstanding. macOS needs Accessibility and
+  Screen Recording access for the application hosting snipctl (ChatGPT/Codex
+  or a terminal). `mod` in chords is Ctrl on Windows and Cmd on macOS.
 
 ## Launch
 

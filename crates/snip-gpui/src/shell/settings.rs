@@ -86,11 +86,6 @@ pub fn open(cx: &mut App) {
 
 impl Settings {
     fn record(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(error) = cx.global::<Shell>().platform.check_keyboard_layout(cx) {
-            self.message = Some(format!("{error:#}"));
-            cx.notify();
-            return;
-        }
         if cx.global::<Shell>().applying {
             return;
         }
@@ -150,13 +145,6 @@ impl Settings {
         self.candidate = None;
     }
 
-    #[cfg(any(target_os = "macos", test))]
-    pub(super) fn layout_changed(&mut self, cx: &mut Context<Self>) {
-        self.cancel(cx);
-        self.candidate = None;
-        cx.notify();
-    }
-
     fn on_modifiers(&mut self, event: &ModifiersChangedEvent, cx: &mut Context<Self>) {
         if !self.recording {
             return;
@@ -179,7 +167,7 @@ impl Settings {
             if key == "escape" {
                 self.cancel(cx);
             } else {
-                match shortcut::record(&event.keystroke) {
+                match cx.global::<Shell>().platform.record_shortcut(&event.keystroke) {
                     Ok(candidate) => {
                         self.candidate = Some(candidate);
                         self.message = None;
@@ -263,6 +251,9 @@ impl Render for Settings {
                     .map(|chord| format!("Proposed: {chord}"))
                     .unwrap_or_else(|| "Record a shortcut, then Apply.".to_owned())
             }))
+            .when(cfg!(target_os = "macos"), |this| {
+                this.child(div().child("Shortcuts use physical keys. Key names use U.S. positions."))
+            })
             .child(
                 div()
                     .flex()

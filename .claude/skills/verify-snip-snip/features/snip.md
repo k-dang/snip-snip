@@ -32,5 +32,9 @@ Preconditions:
 - The overlay is a frozen screenshot of whatever was on screen at the keypress. Show the fixture before the hotkey, not after.
 - `snip` closes the fixture once the editor opens, because the topmost fixture would cover it. Run `target` again before each snip.
 - `snip` records the requested size for `drag` mapping; it cannot read the app's real size. Copy and `inspect` to confirm. One early run produced 602x300 for a 600x300 request and never reproduced; treat a mismatch as a finding and retry once.
+- On Retina, both drag ends include one screenshot pixel. The 600×300 point
+  recipe therefore selects 1199×599 image pixels at 2× scale. The native
+  fixture's captured colors may differ from the Windows RGB constants;
+  compare clipboard pixels with a screenshot of the fixture on that display.
 - Right-click cancel and `snip-click` have no snipctl command; report them as skipped.
 - With several monitors an overlay opens on each, but only the first is activated for keys.

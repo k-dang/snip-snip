@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+#[cfg(any(not(target_os = "macos"), test))]
 use gpui::Keystroke;
 
 pub fn default_shortcut() -> HotKey {
@@ -17,6 +18,7 @@ pub fn validate(shortcut: HotKey) -> Result<HotKey> {
     Ok(shortcut)
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 pub fn record(key: &Keystroke) -> Result<HotKey> {
     let mut chord = String::new();
     for (present, name) in [

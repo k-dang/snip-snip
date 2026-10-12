@@ -46,10 +46,10 @@ cargo run --release -p snip-gpui --features gpui_platform/runtime_shaders
 ```
 
 macOS also asks for Screen Recording permission on the first snip.
-Capture shortcuts currently support the macOS ABC and U.S. keyboard layouts.
-Other layouts show a Settings error and retain menu-based New snip, so the
-app cannot silently bind a different physical key. Changing to a supported
-layout restores shortcut registration when the chord is available.
+Capture shortcuts on macOS use physical key positions and work across input
+sources. Key names in Settings use U.S. positions: the default stays on the
+physical U.S. S key when you switch layouts. Recording a shortcut binds the
+keys you actually press; changing the input source keeps that binding.
 
 ## Usage
 

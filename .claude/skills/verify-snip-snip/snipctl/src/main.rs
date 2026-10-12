@@ -31,6 +31,7 @@ snipctl <command> [args]
   cancel-snip           Alt+Shift+S, then Esc on the overlay; asserts no editor opens
   layout                print where the editor draws the image
   key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  left  home  esc
+                        macOS code:N presses virtual-key code N, e.g. alt+shift+code:1
   type TEXT...          focus the editor and type; letters, digits, spaces as keys, others as Unicode
   drag X1 Y1 X2 Y2 [KEY] focus the editor and drag in Fit image pixels, optionally holding KEY
   drag-screen X1 Y1 X2 Y2 [KEY] drag in absolute screen units (also works after zoom/pan)
@@ -38,6 +39,7 @@ snipctl <command> [args]
   click X Y             focus the editor and click a point in image pixels
   double-click X Y      focus the editor and double-click in Fit image pixels
   click-screen X Y      focus the editor and click in absolute screen units
+  click-desktop X Y     click an absolute desktop point without focusing the editor
   hover-screen X Y      focus the editor and move the cursor without clicking
   cursor                Windows: read the native cursor shape
   resize-editor W H     Windows: resize the owned editor's client area
@@ -123,6 +125,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         }
         "double-click" => double_click(numbers(rest, 2)?),
         "click-screen" | "hover-screen" => screen_pointer(numbers(rest, 2)?, command == "click-screen"),
+        "click-desktop" => click_desktop(numbers(rest, 2)?),
         #[cfg(windows)]
         "cursor" => run::current()?.step(&format!("native cursor: {}", platform::cursor_name()?)),
         #[cfg(windows)]
@@ -382,9 +385,10 @@ fn snip(n: Vec<f32>, chord: &str) -> Result<()> {
     })?;
     let scale = xcap::Monitor::from_point(x, y)?.scale_factor()?;
     let (_, image_per_unit) = platform::units(scale);
+    // Drag endpoints include one screenshot pixel, not an entire Retina point.
     let image = (
-        (w as f32 * image_per_unit) as u32,
-        (h as f32 * image_per_unit) as u32,
+        ((w - 1) as f32 * image_per_unit) as u32 + 1,
+        ((h - 1) as f32 * image_per_unit) as u32 + 1,
     );
     fs::write(run.path("image.size"), format!("{}x{}", image.0, image.1))?;
     input.park()?;
@@ -660,6 +664,13 @@ fn screen_pointer(n: Vec<f32>, click: bool) -> Result<()> {
         "{} screen {at:?}",
         if click { "click" } else { "hover" }
     ))
+}
+
+fn click_desktop(n: Vec<f32>) -> Result<()> {
+    let run = run::current()?;
+    let at = (n[0].round() as i32, n[1].round() as i32);
+    Input::new()?.click(at)?;
+    run.step(&format!("desktop click {at:?}"))
 }
 
 fn scroll_screen(n: Vec<f32>, notches: i32, held: Option<&str>) -> Result<()> {

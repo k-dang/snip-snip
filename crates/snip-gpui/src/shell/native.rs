@@ -11,6 +11,9 @@ use tray_icon::{
 
 use super::{ShellEvent, ShellPlatform};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 pub struct NativeShell {
     // Dropping the icon also releases its native menu.
     _tray: TrayIcon,
@@ -63,20 +66,14 @@ impl NativeShell {
 }
 
 impl ShellPlatform for NativeShell {
-    fn check_keyboard_layout(&self, cx: &App) -> Result<()> {
-        // Carbon hotkeys use fixed physical US positions, whereas GPUI reports
-        // layout-derived characters. Reject layouts we cannot map faithfully.
+    fn record_shortcut(&self, key: &gpui::Keystroke) -> Result<HotKey> {
         #[cfg(target_os = "macos")]
-        anyhow::ensure!(
-            matches!(
-                cx.keyboard_layout().id(),
-                "com.apple.keylayout.US" | "com.apple.keylayout.ABC"
-            ),
-            "Capture shortcuts currently support macOS ABC and U.S. keyboard layouts. Use New snip or switch your keyboard layout before configuring a shortcut."
-        );
+        {
+            let _ = key;
+            macos::record_shortcut()
+        }
         #[cfg(not(target_os = "macos"))]
-        let _ = cx;
-        Ok(())
+        super::shortcut::record(key)
     }
     fn dismiss_menu(&mut self) -> Result<()> {
         #[cfg(windows)]
