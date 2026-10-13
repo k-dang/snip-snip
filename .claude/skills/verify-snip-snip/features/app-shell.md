@@ -77,10 +77,12 @@ claim native proof of those failures or of icon disappearance/legibility.
   open capture with that chord and cancel through `shell-key esc` instead.
 - Configuration uses the platform's per-user app folder; tests use temporary
   storage. A real preference change must not leak into another verification run.
-- macOS shortcuts currently support ABC and U.S. layouts. Verify that another
-  layout visibly disables the shortcut while New snip remains available,
-  then switch back and verify recovery. Do not treat simulated layout events
-  as proof of native Carbon key mapping.
+- macOS capture shortcuts bind physical keys across input sources. Settings
+  labels use U.S. key positions. Verify recording, capture, and persistence
+  on the active source, then check the same physical chord after a source
+  change. Simulated GPUI keystrokes do not prove native key-code recording.
+  The driver accepts macOS virtual-key codes in chords, for example
+  `alt+shift+code:1` presses the physical U.S. S position regardless of layout.
 - `verify-shell` does not exercise Copy & Close. Follow [Export](export.md)
   for that focused integration check; prove the shell survives completion and
   another capture succeeds. A toolbar check does not prove delivery of the

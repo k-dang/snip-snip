@@ -166,6 +166,8 @@ fn parse_key(name: &str) -> Result<Key> {
         "home" => Key::Home,
         "end" => Key::End,
         "space" => Key::Space,
+        #[cfg(target_os = "macos")]
+        code if code.starts_with("code:") => Key::Other(code[5..].parse::<u16>()?.into()),
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphanumeric()) => {
             Key::Unicode(s.chars().next().unwrap())
         }

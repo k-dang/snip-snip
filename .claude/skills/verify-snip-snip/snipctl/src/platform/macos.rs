@@ -1,5 +1,5 @@
-//! macOS: screen units are points. UNTESTED: written from the platform's
-//! documented behavior, never run. Prove it on a Mac and delete this warning.
+//! macOS: screen units are points. Capture and clipboard have native proof;
+//! save-panel automation and the full feature pass remain unverified.
 //! Input needs Accessibility permission for the terminal running snipctl,
 //! and window titles need Screen Recording permission.
 

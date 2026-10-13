@@ -21,19 +21,14 @@ mod tests;
 pub enum ShellEvent {
     Settings,
     NewSnip,
-    Hotkey {
-        id: u32,
-        pressed: bool,
-    },
+    Hotkey { id: u32, pressed: bool },
     Quit,
-    #[cfg(any(target_os = "macos", test))]
-    KeyboardLayoutChanged,
 }
 
 /// Native effects stay on GPUI's main thread. Tests deliver the same events
 /// and control hotkey failures without touching machine-wide registrations.
 pub trait ShellPlatform {
-    fn check_keyboard_layout(&self, cx: &App) -> Result<()>;
+    fn record_shortcut(&self, key: &gpui::Keystroke) -> Result<HotKey>;
     fn register(&mut self, shortcut: HotKey) -> Result<()>;
     fn unregister(&mut self, shortcut: HotKey) -> Result<()>;
     fn capture(&mut self, cx: &mut App);
@@ -85,10 +80,7 @@ pub fn install(
         ),
     };
     let needs_repair = error.is_some();
-    let registered = match platform
-        .check_keyboard_layout(cx)
-        .and_then(|_| platform.register(shortcut))
-    {
+    let registered = match platform.register(shortcut) {
         Ok(()) => true,
         Err(err) => {
             let registration = format!(
@@ -153,49 +145,6 @@ pub fn install(
                 }
                 match event {
                     ShellEvent::Settings => settings::open(cx),
-                    #[cfg(any(target_os = "macos", test))]
-                    ShellEvent::KeyboardLayoutChanged => {
-                        cx.update_global::<Shell, _>(|shell, cx| {
-                            match shell.platform.check_keyboard_layout(cx) {
-                                Err(error) => {
-                                    let released = if shell.registered {
-                                        shell.platform.unregister(shell.shortcut)
-                                    } else {
-                                        Ok(())
-                                    };
-                                    shell.registered = false;
-                                    shell.error = Some(match released {
-                                        Ok(()) => format!("{error:#}"),
-                                        Err(release) => format!(
-                                            "{error:#}; could not release the old shortcut: {release:#}"
-                                        ),
-                                    });
-                                }
-                                Ok(()) if !shell.registered && !shell.applying => {
-                                    match shell.platform.register(shell.shortcut) {
-                                        Ok(()) => {
-                                            shell.registered = true;
-                                            shell.error = None;
-                                        }
-                                        Err(error) => {
-                                            shell.error = Some(format!(
-                                                "Could not register the capture shortcut: {error:#}"
-                                            ))
-                                        }
-                                    }
-                                }
-                                Ok(()) => {}
-                            }
-                        });
-                        if let Some(window) = cx.global::<Shell>().settings {
-                            window
-                                .update(cx, |settings, _, cx| settings.layout_changed(cx))
-                                .ok();
-                        }
-                        if cx.global::<Shell>().error.is_some() {
-                            settings::open(cx);
-                        }
-                    }
                     ShellEvent::NewSnip => cx.update_global::<Shell, _>(|shell, cx| {
                         if !shell.recording {
                             shell.platform.capture(cx);
@@ -248,16 +197,6 @@ fn dismiss_menu(cx: &mut App) -> bool {
 
 pub fn start(cx: &mut App) -> Result<()> {
     let (tx, rx) = futures::channel::mpsc::unbounded();
-    #[cfg(target_os = "macos")]
-    {
-        let layout_events = tx.clone();
-        cx.on_keyboard_layout_change(move |_| {
-            layout_events
-                .unbounded_send(ShellEvent::KeyboardLayoutChanged)
-                .ok();
-        })
-        .detach();
-    }
     let platform = native::NativeShell::new(tx)?;
     let path = dirs::config_dir()
         .context("locating the user settings folder")?
@@ -329,7 +268,6 @@ fn backup(path: &Path) -> Result<Option<tempfile::TempPath>> {
 }
 
 pub(super) fn apply(candidate: HotKey, cx: &mut App) -> Result<()> {
-    cx.global::<Shell>().platform.check_keyboard_layout(cx)?;
     let candidate = shortcut::validate(candidate)?;
     let shell = cx.global::<Shell>();
     if candidate == shell.shortcut
@@ -368,10 +306,7 @@ pub(super) fn apply(candidate: HotKey, cx: &mut App) -> Result<()> {
         let outcome = match saved {
             Err(error) => Err(error),
             Ok(previous) => {
-                let release = cx.update(|cx| cx.update_global::<Shell, _>(|shell, cx| {
-                    // Registration preceded disk work; the layout may have
-                    // changed while that work was pending.
-                    shell.platform.check_keyboard_layout(cx)?;
+                let release = cx.update(|cx| cx.update_global::<Shell, _>(|shell, _| {
                     if shell.registered && candidate != shell.shortcut {
                         shell.platform.unregister(shell.shortcut).context("releasing the previous shortcut; change was canceled")
                     } else { Ok(()) }
@@ -396,7 +331,7 @@ pub(super) fn apply(candidate: HotKey, cx: &mut App) -> Result<()> {
         let succeeded = outcome.is_ok();
         cx.update(|cx| {
             if !cx.has_global::<Shell>() { return; }
-            let window = cx.update_global::<Shell, _>(|shell, cx| {
+            let window = cx.update_global::<Shell, _>(|shell, _| {
                 match outcome {
                     Ok(()) => {
                         shell.shortcut = candidate;
@@ -412,18 +347,6 @@ pub(super) fn apply(candidate: HotKey, cx: &mut App) -> Result<()> {
                             Err(cleanup) => format!("Could not apply shortcut: {error:#}; could not release the unapplied shortcut: {cleanup:#}"),
                         };
                         shell.error = Some(message);
-                        // Layout recovery waits for transaction cleanup so a
-                        // same-chord retry cannot unregister its own recovery.
-                        if !shell.registered && shell.platform.check_keyboard_layout(cx).is_ok() {
-                            match shell.platform.register(shell.shortcut) {
-                                Ok(()) => shell.registered = true,
-                                Err(recovery) => {
-                                    shell.error.as_mut().unwrap().push_str(&format!(
-                                        "; could not restore the previous shortcut: {recovery:#}"
-                                    ));
-                                }
-                            }
-                        }
                     }
                 }
                 shell.applying = false;
