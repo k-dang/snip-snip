@@ -29,15 +29,15 @@ snipctl <command> [args]
   shell-menu ITEM       Windows tray menu: new-snip, settings, quit
   shell-key COMBO...    focus Settings if open, then send real keyboard input
   cancel-snip           Alt+Shift+S, then Esc on the overlay; asserts no editor opens
-  layout                print where the editor draws the image
+  layout                print the painted image transform at the current zoom
   key COMBO...          focus the editor and press chords: r  mod+z  mod+shift+z  left  home  esc
                         macOS code:N presses virtual-key code N, e.g. alt+shift+code:1
   type TEXT...          focus the editor and type; letters, digits, spaces as keys, others as Unicode
-  drag X1 Y1 X2 Y2 [KEY] focus the editor and drag in Fit image pixels, optionally holding KEY
+  drag X1 Y1 X2 Y2 [KEY] focus the editor and drag in image pixels at the current zoom, optionally holding KEY
   drag-screen X1 Y1 X2 Y2 [KEY] drag in absolute screen units (also works after zoom/pan)
-  drag-preview X1 Y1 X2 Y2 NAME drag in Fit image pixels, screenshot before releasing the mouse
+  drag-preview X1 Y1 X2 Y2 NAME drag in image pixels at the current zoom, screenshot before releasing the mouse
   click X Y             focus the editor and click a point in image pixels
-  double-click X Y      focus the editor and double-click in Fit image pixels
+  double-click X Y      focus the editor and double-click in image pixels at the current zoom
   click-screen X Y      focus the editor and click in absolute screen units
   click-desktop X Y     click an absolute desktop point without focusing the editor
   hover-screen X Y      focus the editor and move the cursor without clicking
@@ -55,6 +55,7 @@ snipctl <command> [args]
   save NAME             mod+s, enter <run>/NAME.png in the save dialog, wait for the file
   cancel-save           open the native save dialog, cancel it, assert the editor stays open
   inspect NAME|PATH     print a PNG's size and fixture/ink color counts
+  compare A B           assert identical decoded pixels (artifact names or PNG paths)
   close                 Esc the editor (finishing text first if editing)
   cleanup               stop the app and fixture this run started; evidence stays
 
@@ -185,12 +186,23 @@ fn dispatch(args: &[String]) -> Result<()> {
         "save" => save(name(rest)?),
         "cancel-save" => cancel_save(),
         "inspect" => inspect(name(rest)?),
+        "compare" => {
+            if rest.len() != 2 {
+                bail!("expected two artifact names or PNG paths");
+            }
+            println!(
+                "{}",
+                screen::compare(&image_path(&rest[0])?, &image_path(&rest[1])?)?
+            );
+            Ok(())
+        }
         "close" => close(),
         "cleanup" => cleanup(),
-        _ => {
+        "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(())
         }
+        _ => bail!("unknown command {command:?}; use snipctl help"),
     }
 }
 
@@ -199,12 +211,17 @@ fn numbers(args: &[String], n: usize) -> Result<Vec<f32>> {
         bail!("expected {n} numbers, got {args:?}");
     }
     args.iter()
-        .map(|a| a.parse::<f32>().with_context(|| format!("not a number: {a}")))
+        .map(|a| {
+            let value = a.parse::<f32>().with_context(|| format!("not a number: {a}"))?;
+            anyhow::ensure!(value.is_finite(), "finite number required: {a}");
+            Ok(value)
+        })
         .collect()
 }
 
 fn name(args: &[String]) -> Result<&str> {
-    args.first().map(String::as_str).context("missing NAME")
+    anyhow::ensure!(args.len() == 1, "expected one NAME");
+    Ok(args[0].as_str())
 }
 
 /// Our running app's pid; every command but `launch` acts on it.
@@ -242,7 +259,7 @@ fn check_launch() -> Result<std::path::PathBuf> {
 }
 
 fn launch_app(run: &Run, exe: &Path) -> Result<()> {
-    let pid = run.spawn("app", &mut Command::new(exe))?;
+    let pid = run.spawn("app", Command::new(exe).env("SNIP_SNIP_VERIFY", "1"))?;
     wait_for("the ready line", Duration::from_secs(10), || {
         let log = run.app_log();
         if log.contains("snip-snip running") {
@@ -375,22 +392,23 @@ fn snip(n: Vec<f32>, chord: &str) -> Result<()> {
     if screen::titled(pid, screen::EDITOR_TITLE)?.is_some() {
         bail!("an editor is already open; close it first");
     }
+    anyhow::ensure!(
+        n[2] >= 2. && n[3] >= 2.,
+        "snip width and height must be at least two screen units"
+    );
     let [x, y, w, h] = [n[0] as i32, n[1] as i32, n[2] as i32, n[3] as i32];
     let mut input = Input::new()?;
+    let views = run.count_in_log("snipctl-view: ");
     open_overlay(&run, &mut input, chord)?;
     // The overlay's selection includes the pixels under both drag ends.
     input.drag((x, y), (x + w - 1, y + h - 1))?;
     wait_for("the editor window", Duration::from_secs(10), || {
         screen::titled(pid, screen::EDITOR_TITLE)
     })?;
-    let scale = xcap::Monitor::from_point(x, y)?.scale_factor()?;
-    let (_, image_per_unit) = platform::units(scale);
-    // Drag endpoints include one screenshot pixel, not an entire Retina point.
-    let image = (
-        ((w - 1) as f32 * image_per_unit) as u32 + 1,
-        ((h - 1) as f32 * image_per_unit) as u32 + 1,
-    );
-    fs::write(run.path("image.size"), format!("{}x{}", image.0, image.1))?;
+    wait_for("the editor's painted image", Duration::from_secs(5), || {
+        Ok((run.count_in_log("snipctl-view: ") > views).then_some(()))
+    })?;
+    let image = Layout::of(&run, &screen::editor(pid)?)?.image;
     input.park()?;
     // The topmost fixture would cover the editor; the snip has consumed it.
     let fixture = run.stop("fixture")?;
@@ -479,22 +497,7 @@ fn layout() -> Result<()> {
     let l = Layout::of(&run, &window)?;
     println!(
         "image {}x{} drawn at screen {:?}, {} screen units per image pixel",
-        l.image.0, l.image.1, l.origin, l.fit
-    );
-    let content = platform::content_rect(&window)?;
-    let capture = window.capture_image()?;
-    println!(
-        "window screen {},{} {}x{}, capture {}x{}, content {},{} {}x{}",
-        window.x()?,
-        window.y()?,
-        window.width()?,
-        window.height()?,
-        capture.width(),
-        capture.height(),
-        content.x,
-        content.y,
-        content.w,
-        content.h
+        l.image.0, l.image.1, l.origin, l.scale
     );
     Ok(())
 }
@@ -728,7 +731,7 @@ fn save(name: &str) -> Result<()> {
     input.chord("mod+s")?;
     platform::save_as(pid, &path, &mut input)?;
     wait_for("the saved file", Duration::from_secs(10), || {
-        Ok(fs::metadata(&path).is_ok_and(|m| m.len() > 0).then_some(()))
+        Ok(image::open(&path).is_ok().then_some(()))
     })?;
     run.step(&format!("saved via dialog -> {}", path.display()))
 }
@@ -744,14 +747,17 @@ fn cancel_save() -> Result<()> {
     run.step("canceled native save dialog; editor remains open")
 }
 
-fn inspect(name: &str) -> Result<()> {
+fn image_path(name: &str) -> Result<std::path::PathBuf> {
     let path = Path::new(name);
-    let path = if path.exists() {
-        path.to_path_buf()
+    if path.exists() || path.is_absolute() || path.components().count() > 1 || path.extension().is_some() {
+        Ok(path.to_path_buf())
     } else {
-        run::current()?.path(&format!("{name}.png"))
-    };
-    println!("{}", screen::inspect(&path)?);
+        Ok(run::current()?.path(&format!("{name}.png")))
+    }
+}
+
+fn inspect(name: &str) -> Result<()> {
+    println!("{}", screen::inspect(&image_path(name)?)?);
     Ok(())
 }
 
@@ -760,10 +766,13 @@ fn close() -> Result<()> {
     let pid = app(&run)?;
     let mut input = Input::new()?;
     focus_editor(&run, &mut input)?;
-    input.chord("esc")?;
-    std::thread::sleep(Duration::from_millis(200));
-    if screen::titled(pid, screen::EDITOR_TITLE)?.is_some() {
+    // Text, gestures, and selection can each consume Escape before closure.
+    for _ in 0..4 {
+        if screen::titled(pid, screen::EDITOR_TITLE)?.is_none() {
+            break;
+        }
         input.chord("esc")?;
+        std::thread::sleep(Duration::from_millis(200));
     }
     wait_for("the editor to close", Duration::from_secs(5), || {
         Ok(screen::titled(pid, screen::EDITOR_TITLE)?.is_none().then_some(()))

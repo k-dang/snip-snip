@@ -1,31 +1,32 @@
 # Undo and redo
 
-`Ctrl+Z` steps back one completed edit (an annotation, a finished text label, or a crop); `Ctrl+Shift+Z` or `Ctrl+Y` steps forward. A new edit after an undo discards the redo branch.
+Undo reverses one completed edit; redo restores it. An edit after undo discards
+the redo branch. View changes preserve document history.
 
 ## Sub-features
 
-- `history-undo` `Ctrl+Z` removes the last completed edit from the preview and from exports.
-- `history-redo` `Ctrl+Shift+Z` and `Ctrl+Y` restore it.
-- `history-branch` an edit after undo clears redo.
-- `history-text` a text label is one edit, committed when finished.
+- Undo/redo for annotation, text, style, and crop changes.
+- One history step per completed gesture or text session.
+- New edits clear the redo branch; Windows also supports Ctrl+Y.
 
 ## How to get to it (user POV)
 
-- `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, and `Ctrl+Y` (Windows only) in the editor. There are no toolbar buttons.
+`mod+z`, `mod+shift+z`, or Ctrl+Y on Windows.
 
 ## Driving it with snipctl
 
-Preconditions:
+Preconditions: fixture snip with one rectangle (`key r`, `drag 100 80 500 220`).
 
-- Baseline snip open with one rectangle drawn (`snipctl key r`, `snipctl drag 100 80 500 220`).
-
-- **Undo.** `snipctl key mod+z`, `snipctl shot history-undo`. The rectangle is gone.
-- **Redo.** `snipctl key mod+shift+z`, `snipctl shot history-redo`. It is back.
-- **Ctrl+Y (Windows).** `snipctl key mod+z ctrl+y`, `snipctl shot history-ctrl-y`. Back again.
-- **Branch.** `snipctl key mod+z`, then `snipctl key a`, `snipctl drag 50 250 250 50`, then `snipctl key mod+shift+z`, `snipctl shot history-branch`. Only the arrow shows.
-- **Proof in pixels.** Copy and `inspect` after each state: `ink=0` with nothing drawn, `ink` above zero when restored.
+- **Undo/redo.** `key mod+z` removes the rectangle; `key mod+shift+z` restores it.
+  Observe both transitions and capture the restored result.
+- **Branch, when history changes.** Undo, draw an arrow, then redo: only the arrow
+  remains. Check Ctrl+Y when Windows shortcut handling changes.
+- **Text, when affected.** A completed text session undoes in one step.
+- **Exact restoration, when investigating history correctness.** Copy a reference,
+  edit, undo, then copy the restored state and `compare reference restored`.
+  One comparison proves restoration; exporting every intermediate state adds little.
 
 ## Gotchas
 
-- A screenshot alone cannot tell "undone" from "never drawn"; take one before and after each history step.
-- Undo while editing text first finishes the label (committing it), then undoes.
+- Observe the original edit before undoing, so disappearance proves a transition.
+- Undo while typing first finishes the label, then undoes it.

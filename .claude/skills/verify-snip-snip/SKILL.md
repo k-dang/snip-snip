@@ -1,97 +1,112 @@
 ---
 name: verify-snip-snip
-description: Drive the real snip-snip desktop app (global hotkey, capture overlay, editor, copy/save) with real mouse and keyboard input and capture proof, on Windows or macOS. Use to confirm a change works end to end, reproduce a bug as a user would, or screenshot the app.
+description: Drive the real snip-snip desktop app with OS mouse/keyboard input to verify a change, reproduce a bug, or capture screenshots on Windows or macOS.
 ---
 
 # Verify snip-snip
 
-snip-snip is a background GPUI app with a tray/menu-bar icon and a configurable capture shortcut, initially `Alt+Shift+S`. A user presses the hotkey, drags a region on the frozen-screen overlay, annotates in the editor, then copies or saves. Every step here drives that same path with injected OS input: the real hotkey, the real overlay, the real save dialog. For tray controls and shortcut configuration, read [App shell](features/app-shell.md).
-
-All driving goes through `snipctl`, a Rust CLI in `snipctl/` next to this file (its own Cargo project, outside the product workspace). From the repo root:
+Use `snipctl`, the Rust CLI beside this file. From the repo root:
 
 ```sh
 cargo run -q --manifest-path .claude/skills/verify-snip-snip/snipctl/Cargo.toml -- help
 ```
 
-Below, `snipctl X` is shorthand for that invocation. Cargo rebuilds it only when its source changes.
+Below, `snipctl X` means that invocation. Read the matching recipe in
+[the feature map](features/README.md) when verifying a particular feature.
 
-## Ground rules
+## Shared desktop
 
-- **One run at a time.** The hotkey is machine-wide and input is the real mouse and keyboard, so two runs (or a user's own snip-snip) cannot coexist. `launch` refuses when any snip-snip is already running; ask the user before stopping one you did not start.
-- **The desktop is shared.** Runs move the user's cursor and type into the foreground window. Tell the user before a run so they keep hands off.
-- **Coordinates.** `snip` takes screen units (physical pixels on Windows, points on macOS) on the primary monitor. `drag`, `click`, and `double-click` map image pixels in Fit; use `key mod+0` before them. After zoom/pan, use `drag-screen`, `click-screen`, and `scroll-screen` with absolute coordinates derived from a current screenshot and `layout`.
-- **Platforms.** Windows is proven end to end. macOS physical shortcuts,
-  recording, restart persistence, capture, and clipboard readback have native
-  proof on Canadian and Dvorak input sources. The full macOS feature pass and
-  save-panel automation remain outstanding. macOS needs Accessibility and
-  Screen Recording access for the application hosting snipctl (ChatGPT/Codex
-  or a terminal). `mod` in chords is Ctrl on Windows and Cmd on macOS.
+- Run one session at a time. `launch` refuses if another snip-snip owns the
+  global shortcut. Ask before stopping an instance you did not start.
+- Announce native runs: they move the user's cursor and type into the foreground
+  window. Keep desktop driving sequential.
+- `cleanup` stops only processes this run owns and retains the evidence.
+  Use it after success or failure.
 
-## Launch
+## Build and launch
 
 ```sh
-cargo build --release -p snip-gpui   # once per app source change
-snipctl launch                       # new run dir target/verify/<run>/, waits for "snip-snip running"
+cargo build --release -p snip-gpui
+snipctl launch
+snipctl doctor
 ```
 
-`launch` starts `target/release/snip-snip` with its output in `<run>/app.log` and records its pid and start time; later commands act on that run (pointer: `target/verify/current`).
+`launch` starts this checkout's release binary and creates `target/verify/<run>/`.
+`doctor` checks ownership, readiness, freshness, competing processes, and desktop
+availability. Run it again if input stops working or the app behaves unexpectedly.
+On macOS, capture/input needs Screen Recording and Accessibility permissions for
+snipctl's host. Native macOS save-panel automation remains unverified.
 
-## Doctor
+## Routine check
 
-Run `snipctl doctor` first, and again whenever anything looks off. It is read-only and ends with `doctor: OK` only when: our pid is alive and is this repo's binary, the ready line is logged with no errors, no other snip-snip runs, the desktop is unlocked (Windows only), and the binary is newer than every file under `crates/` (otherwise: rebuild, relaunch).
-
-## Drive
-
-The canonical loop:
+Run this short flow for broad editor changes; for a focused change, exercise the
+changed behavior and its relevant output instead. Observe crop, undo, and redo
+as they happen, then capture the final editor and export once through each path.
 
 ```sh
-snipctl target                    # fixture at screen 100,100, 800x500: left half #2E86DE, right half #20BF6B
-snipctl snip 200 200 600 300      # hotkey, drag on overlay, wait for editor; closes the fixture
-snipctl key r                     # tool keys p a r t c; chords like mod+z mod+shift+z mod+c
-snipctl drag 100 80 500 220       # in image pixels
-snipctl shot 01-rectangle         # editor window -> <run>/01-rectangle.png
-snipctl save 02-saved             # mod+s, enters <run>/02-saved.png in the native dialog, waits for the file
-snipctl inspect 02-saved          # size + exact-color counts: blue, green, ink (#E5484D)
+snipctl target
+snipctl snip 200 200 600 300
+snipctl key r
+snipctl drag 100 80 500 220
+snipctl key c
+snipctl drag 0 0 300 300
+snipctl key mod+z
+snipctl key mod+shift+z
+snipctl shot result
+snipctl key mod+c
+snipctl clipboard copied
+snipctl save saved
+snipctl compare copied saved
+snipctl inspect saved
 snipctl close
+snipctl cleanup
 ```
 
-The fixture gives every snip known pixels, so `inspect` turns "it looks right" into numbers: on Windows at 100% the snip above yields `600x300 blue=90000 green=90000`, and annotations add `ink`. Snip without `target` to capture whatever is on screen.
+Completion: capture shows the blue/green fixture; the rectangle appears; crop
+keeps the blue region; undo restores the full image and redo restores the crop;
+the final PNG is 300×300 with the visible rectangle portion; Copy and Save have
+identical decoded pixels. `mod` means Ctrl on Windows and Cmd on macOS.
 
-Per-feature recipes, entry points, and gotchas live in [`features/README.md`](features/README.md). Read the matching feature file before driving it.
+## Coordinates and checks
 
-`drag X1 Y1 X2 Y2 shift` holds Shift through the gesture. `drag-screen` also
-accepts a held key, including `space` for pan. `drag-preview` captures the
-live drawing before mouse release. `hover-screen` settles the pointer before
-Windows `cursor` reads its native shape; `resize-editor` takes client-area
-dimensions. The Paint paste recipe lives in [Export](features/export.md).
+- `snip` uses screen units: physical pixels on Windows, points on macOS.
+- `drag`, `click`, and `double-click` use source-image pixels at the current
+  painted zoom/pan. Use `layout` to see the transform. Target visible points;
+  use `key mod+0` to bring the full image back into view.
+- Use `*-screen` commands for toolbar controls or absolute desktop positions,
+  derived from a current screenshot. Coordinates vary with wrapping and scaling.
+- `snip` prints the actual source-image dimensions reported by the painted editor.
+  This report locates input; verify correctness through the visible result and
+  the exported image, rather than treating diagnostics as proof.
+- `compare A B` accepts run artifact names or PNG paths and fails on changed
+  dimensions or RGBA pixels. It ignores PNG encoding and metadata differences.
+- `inspect` reports dimensions and diagnostic exact-color counts. Judge content
+  by geometry and appearance; RGB totals vary with scaling, antialiasing, styles,
+  and display profiles.
 
-For the Windows shell, use `snipctl verify-shell` with no app running; it owns
-launch, restart, checks, evidence, and cleanup. Follow [App shell](features/app-shell.md)
-for its completion criteria and remaining visual review.
+## Evidence and targeted checks
 
-## Evidence
+Keep a screenshot at meaningful checkpoints and on failures. Inspect the actual
+clipboard/file output for export changes; status text alone is insufficient.
+Compare Copy and Save once per flow. Add before/after exports when investigating
+an unintended pixel change or proving an undo/redo restoration.
 
-Everything lands in `target/verify/<run>/`: `steps.log` (each action, timestamped), `app.log` (the app's stderr: hotkey, capture, render, export timings), screenshots, and exported PNGs.
+Use native scaled-display/Retina checks when changing capture coordinates,
+viewport transforms, DPI, or monitor handling. Automated scale-change tests cover
+routine work. Use the [Export](features/export.md) Paint recipe when changing
+clipboard formats or lifetime. Hardware pinch needs a touchpad.
 
-A proof:
+Report what was exercised, its result, and any relevant untested path with the
+reason. A toolbar action proves that entry point; shortcut delivery needs its
+own check when shortcuts are in scope.
 
-- Drives the user path (hotkey, overlay, keys, dialog), never internal state.
-- Captures the action and the result: a `shot` after each meaningful step, not only the end.
-- Verifies the side effect outside the app: `clipboard` then `inspect` for Copy, `save` then `inspect` for Save. The editor's status text alone is not proof.
-- States the expected `inspect` numbers before reading them.
+Logs, screenshots, and exported PNGs live under the run directory. `steps.log`
+records actions; `app.log` records app diagnostics. `cargo clean` removes them.
 
-`cargo clean` deletes `target/verify`; copy evidence elsewhere if it must outlive the build tree.
+## Maintaining snipctl
 
-## Cleanup
-
-```sh
-snipctl close      # if an editor is open
-snipctl cleanup    # stops only the app and fixture pids this run recorded
-```
-
-Cleanup never touches evidence; it prints the run dir it kept. After a failed step, run `cleanup` before retrying so no stray instance keeps the hotkey.
-It also stops Paint when `paint-launch` started it for this run.
-
-## Changing snipctl
-
-Shared code lives in `snipctl/src/`; everything OS-specific (focus, the editor's content area, coordinate units, the save dialog, doctor checks) is in `snipctl/src/platform/`. `screen.rs` mirrors the editor's layout constants from `crates/snip-gpui/src/editor.rs`; when those change, update it in the same commit. Check both platforms compile: `cargo check --target aarch64-apple-darwin` in `snipctl/`.
+OS adapters live in `snipctl/src/platform/`. `launch` enables `SNIP_SNIP_VERIFY`
+so the editor logs its painted image transform and actual content size. This is
+read-only observation; actions still use OS input and output checks use PNGs.
+Keep the diagnostic format and reader in sync. Run snipctl tests, formatting,
+and Clippy; check its macOS target when changing shared code or its macOS adapter.

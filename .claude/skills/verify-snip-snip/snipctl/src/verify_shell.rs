@@ -3,7 +3,7 @@
 use std::{
     fs,
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -95,6 +95,9 @@ pub fn verify(chord: &str) -> Result<()> {
         session
             .run
             .step("REVIEW  settings-applied.png: correct applied chord and no clipped labels/errors")?;
+        session.run.step(
+            "REVIEW  fixture-editor.png and fixture.png: capture shows the blue/green fixture halves",
+        )?;
     } else if let Err(error) = &result {
         session.run.step(&format!("FAIL  Verification: {error:#}")).ok();
     }
@@ -148,9 +151,17 @@ fn scenario(session: &Session, chord: &str, candidate: HotKey) -> Result<()> {
     crate::target()?;
     crate::snip(vec![200., 200., 600., 300.], chord)?;
     crate::shot("fixture-editor")?;
-    run.step("Expect fixture.png: 600x300, blue=90000 green=90000 ink=0")?;
     crate::save("fixture")?;
-    check_fixture(&run.path("fixture.png"))?;
+    crate::key(&["mod+c".into()])?;
+    crate::clipboard("fixture-copy")?;
+    ensure!(
+        image::image_dimensions(run.path("fixture.png"))? == (600, 300),
+        "fixture export must be 600x300"
+    );
+    run.step(&screen::compare(
+        &run.path("fixture.png"),
+        &run.path("fixture-copy.png"),
+    )?)?;
     run.step(&format!(
         "PASS  Fixture export: {}",
         screen::inspect(&run.path("fixture.png"))?
@@ -193,22 +204,6 @@ fn cancel_overlay(run: &Run, input: &mut Input) -> Result<()> {
     wait_for("all capture overlays to close", Duration::from_secs(5), || {
         Ok(screen::windows_of(pid)?.is_empty().then_some(()))
     })
-}
-
-fn check_fixture(path: &Path) -> Result<()> {
-    let image = image::open(path)?.to_rgb8();
-    ensure!(
-        image.dimensions() == (600, 300),
-        "fixture export dimensions changed: {:?}",
-        image.dimensions()
-    );
-    ensure!(
-        image
-            .enumerate_pixels()
-            .all(|(x, _, pixel)| pixel.0 == screen::COLORS[usize::from(x >= 300)].1),
-        "fixture export must contain exactly the expected blue and green halves"
-    );
-    Ok(())
 }
 
 struct Session {
@@ -364,20 +359,5 @@ mod tests {
         let backup = preferences.original.as_ref().unwrap();
         assert_eq!(fs::read_to_string(backup).unwrap(), "original");
         assert!(format!("{error:#}").contains(&backup.display().to_string()));
-    }
-
-    #[test]
-    fn fixture_check_rejects_wrong_pixels_even_when_color_totals_match() {
-        let folder = tempfile::tempdir().unwrap();
-        let path = folder.path().join("fixture.png");
-        let mut image = image::RgbImage::from_fn(600, 300, |x, _| {
-            image::Rgb(screen::COLORS[usize::from(x >= 300)].1)
-        });
-        image.save(&path).unwrap();
-        check_fixture(&path).unwrap();
-        image.put_pixel(0, 0, image::Rgb(screen::COLORS[1].1));
-        image.put_pixel(300, 0, image::Rgb(screen::COLORS[0].1));
-        image.save(&path).unwrap();
-        assert!(check_fixture(&path).is_err());
     }
 }

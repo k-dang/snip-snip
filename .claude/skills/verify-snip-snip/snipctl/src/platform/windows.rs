@@ -22,10 +22,9 @@ pub fn init() {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }.ok();
 }
 
-/// Screen units per GPUI logical pixel, and snipped-image pixels per screen
-/// unit, for a monitor with `scale` (its DPI / 96).
-pub fn units(scale: f32) -> (f32, f32) {
-    (scale, 1.0)
+/// Windows OS input uses physical pixels; GPUI layout uses logical pixels.
+pub fn screen_units_per_logical(scale: f32) -> f32 {
+    scale
 }
 
 fn hwnd(window: &xcap::Window) -> Result<HWND> {
@@ -37,7 +36,7 @@ pub fn is_focused(window: &xcap::Window) -> Result<bool> {
 }
 
 /// The window's client area (below the native title bar) in screen pixels.
-pub fn content_rect(window: &xcap::Window) -> Result<screen::Rect> {
+pub fn content_rect(window: &xcap::Window, _painted_content: (f32, f32)) -> Result<screen::Rect> {
     let hwnd = hwnd(window)?;
     let mut rect = RECT::default();
     let mut origin = POINT::default();
@@ -102,7 +101,7 @@ pub fn cursor_name() -> Result<&'static str> {
 pub fn resize_editor(window: &xcap::Window, width: i32, height: i32) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos};
     let hwnd = hwnd(window)?;
-    let content = content_rect(window)?;
+    let content = content_rect(window, (0., 0.))?;
     let mut frame = RECT::default();
     unsafe {
         GetWindowRect(hwnd, &mut frame)?;

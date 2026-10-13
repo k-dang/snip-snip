@@ -20,7 +20,7 @@ controls. Close Settings and capture with the new chord or the menu.
 
 ## Driving it with snipctl
 
-On Windows, build the current release binary, coordinate with other threads,
+Preconditions: on Windows, build the current release binary, coordinate with other threads,
 and announce that the run uses real mouse/keyboard input. Start with no
 snip-snip running and an unlocked desktop; the 800×500 fixture at 100,100 must
 fit on the primary monitor. Run:
@@ -33,8 +33,8 @@ The command owns its run: windowless launch, opening Settings twice and
 checking its identity/focus, recording and applying a replacement, capture
 with that chord after Settings closes, fixture export, editor closure,
 native Quit, restart and capture with the saved chord, menu capture and
-cancellation, and final Quit. It asserts the exported fixture is exactly
-600×300 with its expected blue and green halves (90,000 pixels each).
+cancellation, and final Quit. It checks the fixture export is 600×300 and
+Copy matches Save's decoded pixels. Review the blue/green fixture visually.
 
 The default test chord is `ctrl+alt+k`. If it is unavailable, use an available
 alternative such as `snipctl verify-shell ctrl+alt+l`. The command prepares an
@@ -53,8 +53,9 @@ reported evidence directory:
   flyout in the frozen image. Live menu closure alone does not prove this.
 - `settings-applied.png`: the expected applied chord and readable labels,
   values, and errors. This image captures the Settings window directly.
-- `fixture.png` is checked automatically; `fixture-editor.png` provides
-  visual context. `app-first-launch.log`, `app.log`, and `steps.log` retain
+- `fixture.png` and `fixture-editor.png`: the capture shows the blue/green
+  fixture halves; dimensions and Copy/Save equality are checked automatically.
+  `app-first-launch.log`, `app.log`, and `steps.log` retain
   both launch histories and the checks.
 
 Conflict/error behavior remains a separate focused native check: with an

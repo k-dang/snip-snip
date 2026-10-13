@@ -1,40 +1,44 @@
 # Snip
 
-Pressing `Alt+Shift+S` anywhere freezes every monitor under a dimmed overlay; dragging a region opens exactly those screen pixels in the editor. `Esc` or a right-click cancels.
+The configured global shortcut (initially `Alt+Shift+S`) freezes every monitor.
+Dragging selects the frozen region and opens it in an editor; Escape or a
+right-click cancels.
 
 ## Sub-features
 
-- `snip-hotkey` the global hotkey opens an overlay on every monitor.
-- `snip-select` a drag selects a region, inclusive of the pixels under both ends, and opens the editor at that size.
-- `snip-click` a click or sub-2px jitter selects nothing; the overlay stays.
-- `snip-cancel` `Esc` (or right-click) closes all overlays without an editor.
-- `snip-repeat` a second hotkey press during a snip is ignored.
+- Global shortcut and overlays on each monitor.
+- Region selection includes the source pixel under both drag ends.
+- A click or tiny jitter leaves the overlay open; a repeated shortcut is ignored.
+- Cancellation closes overlays without an editor.
 
 ## How to get to it (user POV)
 
-- Press `Alt+Shift+S` while snip-snip runs in the background.
-- On the overlay: drag with the left button; `Esc`, `Alt+F4`, or right-click to cancel.
+Press the configured shortcut, then drag a region. Escape or right-click cancels.
 
 ## Driving it with snipctl
 
-Preconditions:
+Preconditions: launched, healthy app; no editor open.
 
-- Baseline preconditions; no editor open.
-
-- **Select.** Run `snipctl target` then `snipctl snip 200 200 600 300`. `app.log` gains `snip: captured N monitor(s)` and `overlay first frame`; the step log ends `editor open`.
-- **Exact pixels.** Run `snipctl key mod+c`, `snipctl clipboard snip-select`, `snipctl inspect snip-select`. Expect `600x300 blue=90000 green=90000 ink=0`.
-- **Edge precision.** Close the editor, then `snipctl target`, `snipctl snip 90 90 20 20`, copy and inspect. Expect `20x20 blue=100`: only the 10x10 quarter inside the fixture.
-- **Cancel.** Run `snipctl cancel-snip`. It presses the hotkey, waits for the overlay, presses `Esc`, and fails if an editor appears.
-- **Proof.** `snipctl shot snip-select-editor` right after the snip shows the editor with the two-color image.
+- **Capture.** `target`, `snip 200 200 600 300`, then `shot snip-editor`.
+  Confirm the blue/green fixture appears with the intended boundary.
+  Copy once (`key mod+c`, `clipboard snip-copy`) and inspect its dimensions/content.
+  The Windows baseline is 600×300. macOS selects source pixels from point coordinates,
+  so dimensions depend on display scaling.
+- **Cancel.** `cancel-snip` opens capture and sends Escape; it fails if an editor opens.
+- **Precision, when capture/scaling changes.** Capture an asymmetric region with a
+  known boundary and check its position and dimensions. On a scaled display,
+  compare exported content with a native reference of the selected screen region.
+  Include multiple monitors when monitor placement/selection changes.
 
 ## Gotchas
 
-- The overlay is a frozen screenshot of whatever was on screen at the keypress. Show the fixture before the hotkey, not after.
-- `snip` closes the fixture once the editor opens, because the topmost fixture would cover it. Run `target` again before each snip.
-- `snip` records the requested size for `drag` mapping; it cannot read the app's real size. Copy and `inspect` to confirm. One early run produced 602x300 for a 600x300 request and never reproduced; treat a mismatch as a finding and retry once.
-- On Retina, both drag ends include one screenshot pixel. The 600×300 point
-  recipe therefore selects 1199×599 image pixels at 2× scale. The native
-  fixture's captured colors may differ from the Windows RGB constants;
-  compare clipboard pixels with a screenshot of the fixture on that display.
-- Right-click cancel and `snip-click` have no snipctl command; report them as skipped.
-- With several monitors an overlay opens on each, but only the first is activated for keys.
+- Show the fixture before capture: the overlay freezes what is already visible.
+  `snip` closes the owned fixture after opening the editor; use `target` for each snip.
+- On a 2× macOS display the baseline drag selects 1199×599 source pixels:
+  each drag end includes one source pixel, rather than a whole screen point.
+- Native display profiles may change fixture RGB values. Use a same-display
+  reference for fidelity checks.
+- `cancel-snip` uses the default shortcut. With another configured chord, open
+  capture with that chord and use `shell-key esc` to cancel.
+- Right-click/tiny-jitter checks require explicit desktop input. Report them as
+  untested if they are relevant to the change and were not exercised.
