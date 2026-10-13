@@ -43,92 +43,84 @@ pub fn editor(pid: u32) -> Result<xcap::Window> {
     titled(pid, EDITOR_TITLE)?.context("no editor window is open")
 }
 
-/// Where the editor paints the image in Fit. Mirrors crates/snip-gpui/src/editor.rs:
-/// 16 px canvas padding below the toolbar, the image centered and never more
-/// than one image pixel per device pixel. All lengths there are logical px.
-/// The toolbar wraps on narrow windows, so its height is measured instead.
+/// The actual painted image transform, reported only in verification runs.
+/// Native window geometry supplies the screen origin; no toolbar/theme assumptions.
 pub struct Layout {
     pub origin: (f32, f32),
-    /// Screen units per image pixel.
-    pub fit: f32,
+    /// Screen units per image pixel, including zoom.
+    pub scale: f32,
     pub image: (u32, u32),
+}
+
+struct PaintedView {
+    image: (u32, u32),
+    origin: (f32, f32),
+    scale: f32,
+    device_scale: f32,
+    content: (f32, f32),
+}
+
+impl PaintedView {
+    fn from_log(log: &str) -> Result<Self> {
+        // A concurrent stderr write may leave the last line incomplete.
+        let complete = log.rsplit_once('\n').map_or("", |(complete, _)| complete);
+        let line = complete
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix("snipctl-view: "))
+            .context("no painted view reported; rebuild the app and launch with snipctl")?;
+        let values = line.split_whitespace().collect::<Vec<_>>();
+        anyhow::ensure!(
+            values.len() == 8,
+            "incomplete painted view report; retry after the frame settles"
+        );
+        let image = (values[0].parse()?, values[1].parse()?);
+        let numbers = values[2..]
+            .iter()
+            .map(|v| v.parse::<f32>())
+            .collect::<Result<Vec<_>, _>>()?;
+        anyhow::ensure!(
+            image.0 > 0
+                && image.1 > 0
+                && numbers.iter().all(|v| v.is_finite())
+                && numbers[2..].iter().all(|v| *v > 0.),
+            "invalid painted view report"
+        );
+        Ok(Self {
+            image,
+            origin: (numbers[0], numbers[1]),
+            scale: numbers[2],
+            device_scale: numbers[3],
+            content: (numbers[4], numbers[5]),
+        })
+    }
 }
 
 impl Layout {
     pub fn of(run: &Run, window: &xcap::Window) -> Result<Self> {
-        let scale = window.current_monitor()?.scale_factor()?;
-        let (units_per_logical, _) = platform::units(scale);
-        let content = platform::content_rect(window)?;
-        let size = std::fs::read_to_string(run.path("image.size")).context("no snip recorded")?;
-        let (w, h) = size.trim().split_once('x').context("bad image.size")?;
-        let image: (u32, u32) = (w.parse()?, h.parse()?);
-
-        let toolbar = toolbar_bottom(window)? - content.y;
-        let canvas = Rect {
-            x: content.x,
-            y: content.y + toolbar,
-            w: content.w,
-            h: content.h - toolbar,
-        };
-        let logical_fit = ((canvas.w / units_per_logical - 32.0) / image.0 as f32)
-            .min((canvas.h / units_per_logical - 32.0) / image.1 as f32)
-            .min(1.0 / scale);
-        let fit = logical_fit * units_per_logical;
-        let origin = (
-            canvas.x + (canvas.w - image.0 as f32 * fit) / 2.0,
-            canvas.y + (canvas.h - image.1 as f32 * fit) / 2.0,
+        let view = PaintedView::from_log(&run.app_log())?;
+        let units_per_logical = platform::screen_units_per_logical(view.device_scale);
+        let content = platform::content_rect(window, view.content)?;
+        anyhow::ensure!(
+            (content.w - view.content.0 * units_per_logical).abs() <= 2.
+                && (content.h - view.content.1 * units_per_logical).abs() <= 2.,
+            "window resized before its painted view settled; retry"
         );
-        Ok(Self { origin, fit, image })
+        Ok(Self {
+            origin: (
+                content.x + view.origin.0 * units_per_logical,
+                content.y + view.origin.1 * units_per_logical,
+            ),
+            scale: view.scale * units_per_logical,
+            image: view.image,
+        })
     }
 
     pub fn to_screen(&self, (x, y): (f32, f32)) -> (i32, i32) {
         (
-            (self.origin.0 + x * self.fit).round() as i32,
-            (self.origin.1 + y * self.fit).round() as i32,
+            (self.origin.0 + x * self.scale).round() as i32,
+            (self.origin.1 + y * self.scale).round() as i32,
         )
-    }
-}
-
-/// The toolbar's bottom border color (`0x333336` in the editor).
-const TOOLBAR_BORDER: [u8; 3] = [0x33, 0x33, 0x36];
-
-/// The screen y just below the toolbar: the first window row that is mostly
-/// the toolbar's 1 px bottom border.
-fn toolbar_bottom(window: &xcap::Window) -> Result<f32> {
-    #[cfg(windows)]
-    {
-        // Window captures can omit invisible frame pixels even when xcap's
-        // reported bounds include them. Scan actual screen pixels instead.
-        let monitor = window.current_monitor()?;
-        let capture = monitor.capture_image()?;
-        let content = platform::content_rect(window)?;
-        let left = (content.x - monitor.x()? as f32).max(0.) as u32;
-        let top = (content.y - monitor.y()? as f32).max(0.) as u32;
-        let right = (left + content.w as u32).min(capture.width());
-        let bottom = (top + content.h as u32).min(capture.height());
-        let row = (top..bottom)
-            .find(|&y| {
-                let border = (left..right)
-                    .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
-                    .count();
-                border as f32 >= 0.8 * (right - left) as f32
-            })
-            .context("no toolbar border in the editor screen pixels")?;
-        Ok(monitor.y()? as f32 + (row + 1) as f32)
-    }
-    #[cfg(not(windows))]
-    {
-        let capture = window.capture_image()?;
-        let per_unit = capture.width() as f32 / window.width()? as f32;
-        let row = (0..capture.height())
-            .find(|&y| {
-                let border = (0..capture.width())
-                    .filter(|&x| capture.get_pixel(x, y).0[..3] == TOOLBAR_BORDER)
-                    .count();
-                border as f32 >= 0.8 * capture.width() as f32
-            })
-            .context("no toolbar border in the editor window")?;
-        Ok(window.y()? as f32 + (row + 1) as f32 / per_unit)
     }
 }
 
@@ -171,4 +163,95 @@ pub fn inspect(path: &Path) -> Result<String> {
         image.width(),
         image.height()
     ))
+}
+
+/// Compare decoded RGBA pixels, allowing PNG encoding/metadata to differ.
+pub fn compare(a: &Path, b: &Path) -> Result<String> {
+    let a_image = image::open(a)
+        .with_context(|| format!("reading {}", a.display()))?
+        .to_rgba8();
+    let b_image = image::open(b)
+        .with_context(|| format!("reading {}", b.display()))?
+        .to_rgba8();
+    anyhow::ensure!(
+        a_image.dimensions() == b_image.dimensions(),
+        "image dimensions differ: {} {:?}, {} {:?}",
+        a.display(),
+        a_image.dimensions(),
+        b.display(),
+        b_image.dimensions()
+    );
+    let different = a_image
+        .pixels()
+        .zip(b_image.pixels())
+        .filter(|(a, b)| a != b)
+        .count();
+    anyhow::ensure!(
+        different == 0,
+        "{different} pixels differ: {} vs {}",
+        a.display(),
+        b.display()
+    );
+    Ok(format!(
+        "identical decoded pixels: {} vs {} ({}x{})",
+        a.display(),
+        b.display(),
+        a_image.width(),
+        a_image.height()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn painted_view_uses_latest_complete_report_and_rejects_invalid_geometry() {
+        let view = PaintedView::from_log(
+            "snipctl-view: 600 300 16 60 1 1 900 600\nsnipctl-view: 1199 599 -40 80 0.75 2 800 500\nsnipctl-view: 1199",
+        )
+        .unwrap();
+        assert_eq!(view.image, (1199, 599));
+        assert_eq!(view.content, (800., 500.));
+        assert_eq!(view.origin, (-40., 80.));
+        assert_eq!(view.scale, 0.75);
+        assert_eq!(view.device_scale, 2.);
+        for log in [
+            "",
+            "snipctl-view: 600 300\n",
+            "snipctl-view: 600 300 0 0 NaN 2 800 500\n",
+            "snipctl-view: 0 300 0 0 1 1 800 500\n",
+        ] {
+            assert!(PaintedView::from_log(log).is_err());
+        }
+    }
+
+    #[test]
+    fn comparison_checks_pixels_dimensions_and_alpha_across_image_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("rgb.png");
+        let b = dir.path().join("rgba.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([20, 30, 40]))
+            .save(&a)
+            .unwrap();
+        let mut rgba = RgbaImage::from_pixel(2, 2, image::Rgba([20, 30, 40, 255]));
+        rgba.save(&b).unwrap();
+        compare(&a, &b).unwrap();
+        rgba.put_pixel(1, 1, image::Rgba([20, 30, 40, 254]));
+        rgba.save(&b).unwrap();
+        assert!(
+            compare(&a, &b)
+                .unwrap_err()
+                .to_string()
+                .contains("1 pixels differ")
+        );
+        image::RgbImage::new(3, 2).save(&b).unwrap();
+        assert!(
+            compare(&a, &b)
+                .unwrap_err()
+                .to_string()
+                .contains("dimensions differ")
+        );
+        assert!(compare(&a, &dir.path().join("missing.png")).is_err());
+    }
 }

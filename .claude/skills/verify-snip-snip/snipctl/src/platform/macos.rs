@@ -13,22 +13,19 @@ pub const PHYSICAL_SCREEN_UNITS: bool = false;
 
 pub fn init() {}
 
-/// Screen units per GPUI logical pixel, and snipped-image pixels per screen
-/// unit, for a display with backing `scale` (2 on Retina).
-pub fn units(scale: f32) -> (f32, f32) {
-    (1.0, scale)
+/// macOS OS input and GPUI layout both use points, including on Retina.
+pub fn screen_units_per_logical(_scale: f32) -> f32 {
+    1.0
 }
 
-/// A standard titled NSWindow's title bar, in points. GPUI's editor uses the
-/// native title bar, so the content area is the frame minus this strip.
-const TITLE_BAR: f32 = 28.0;
-
-pub fn content_rect(window: &xcap::Window) -> Result<screen::Rect> {
+/// The native frame includes the title bar; the painted viewport supplies
+/// its actual height rather than assuming a fixed macOS title-bar size.
+pub fn content_rect(window: &xcap::Window, painted_content: (f32, f32)) -> Result<screen::Rect> {
     Ok(screen::Rect {
         x: window.x()? as f32,
-        y: window.y()? as f32 + TITLE_BAR,
+        y: window.y()? as f32 + window.height()? as f32 - painted_content.1,
         w: window.width()? as f32,
-        h: window.height()? as f32 - TITLE_BAR,
+        h: painted_content.1,
     })
 }
 

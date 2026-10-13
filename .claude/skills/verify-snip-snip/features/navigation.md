@@ -1,51 +1,41 @@
 # Navigation
 
-Ctrl/Cmd+wheel or pinch zooms around the pointer. Space+drag temporarily pans.
-Fit and 100% work through toolbar controls and shortcuts. Navigation preserves
-document edits, history, and original export resolution.
+Modified wheel or pinch zooms around the pointer. Space+drag pans; Fit and 100%
+set the view. Navigation preserves edits, history, and original export resolution.
 
 ## Sub-features
 
-- `navigation-zoom` modified wheel changes magnification; plain wheel does not.
-- `navigation-pan` Space+drag moves the view and stops at reachable image edges.
-- `navigation-presets` `mod+0` fits; `mod+1` centers at 100%.
-- `navigation-edit` drawing, selection, and text editing follow the displayed view.
-- `navigation-export` navigation and resizing preserve exported pixels.
+- Modified wheel/pinch zoom; plain wheel leaves the view unchanged.
+- Temporary pan with reachable image edges and Escape cancellation.
+- Fit/100% presets, resize behavior, and display-scale changes.
+- Drawing, selection, text, and crop follow the displayed view.
 
 ## How to get to it (user POV)
 
-- Hold Ctrl on Windows or Cmd on macOS while scrolling over the canvas.
-- Hold Space and drag the canvas; release to resume editing.
-- Click Fit/100% or use their shortcuts; resize the editor normally.
+Ctrl+wheel (Windows) or Cmd+wheel (macOS), touchpad pinch, Space+drag,
+Fit/100% toolbar controls, or `mod+0`/`mod+1`.
 
 ## Driving it with snipctl
 
-Preconditions:
+Preconditions: fixture snip with an annotation; canvas points from `layout`.
 
-- Baseline fixture snip open, with annotations and a copied/saved reference PNG.
-- Derive absolute canvas and toolbar points from a current screenshot and `layout`.
-
-- **Presets.** `key mod+1`, `shot navigation-100-view`, then `key mod+0`
-  and `shot navigation-fit-view`. Also click both toolbar controls. At 100%,
-  one source pixel occupies one screen pixel on Windows.
-- **Wheel.** `scroll-screen X Y -10 mod` zooms in ten notches. Record the
-  percentage and pointer anchoring. `scroll-screen X Y 3` leaves placement
-  unchanged. Compare copied pixels to the reference.
-- **Pan.** `drag-screen X1 Y1 X2 Y2 space` moves the view. Photograph the
-  changed placement and exercise both pan bounds. Copy/save still matches
-  the reference at its original resolution.
-- **Resize.** Windows `resize-editor 480 320` sets the client area; inspect
-  wrapping and available canvas. Manual zoom retains its percentage; Fit
-  responds to the new size. Restore the previous client dimensions.
-- **Editing.** Use absolute `drag-screen`/`click-screen` positions at zoom.
-  Export to verify image geometry, and compare undo/redo to prior PNGs. Start
-  typing in Fit, wheel-zoom while editing, then continue typing and inspect
-  the caret, final label, and native saved PNG.
+- **Zoom/presets.** `scroll-screen X Y -10 mod` zooms around the pointer;
+  `scroll-screen X Y 3` leaves placement unchanged. Check Fit/100% via shortcuts
+  and, when toolbar controls changed, their visible buttons.
+- **Pan.** `drag-screen X1 Y1 X2 Y2 space` moves the view; check both bounds.
+- **Resize.** On Windows, `resize-editor 480 320` changes the client area.
+  Manual zoom retains magnification; Fit responds to the new size.
+- **Editing.** Image-coordinate `drag`/`click` follow the current painted transform.
+  Draw or move an annotation at zoom and inspect the resulting geometry.
+  For text changes, type, zoom while editing, continue typing, and inspect the caret/label.
+- **Output invariant.** Copy a reference before navigation and one after zoom,
+  pan, and resize; `compare reference after-navigation` must pass. Capture the
+  final view. Additional intermediate exports are useful only to localize a failure.
+- **Scaling, when affected.** Check 100% maps a source pixel to a physical display
+  pixel, including a scaled display; check pointer mapping after a scale change.
 
 ## Gotchas
 
-- Image-coordinate helpers assume Fit; after zoom/pan use absolute screen input.
-- A wheel event proves wheel delivery. Hardware pinch needs a real touchpad;
-  record it as skipped when that hardware is unavailable.
-- Crop or active drawing gestures can ignore navigation input. Finish the
-  current pointer gesture before testing a view change.
+- Image points outside the visible canvas cannot be clicked. Reset Fit to reveal them.
+- Wheel injection does not prove hardware pinch. Use a touchpad when pinch is in scope.
+- Navigation is ignored during drawing or another active pointer gesture.

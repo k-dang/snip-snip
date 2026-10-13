@@ -1,29 +1,36 @@
 # Crop
 
-`C` then a drag on the image marks a crop rectangle; everything outside is dimmed in the editor and excluded from copy and save. A new drag replaces the crop.
+Crop keeps the original image and annotations available while copy/save contains
+only the chosen region. Corners adjust it; Clear crop restores the full image.
 
 ## Sub-features
 
-- `crop-set` dragging sets the crop; the outside is dimmed and the kept area outlined in white.
-- `crop-export` copy and save contain only the cropped pixels.
-- `crop-cancel` `Esc` mid-drag restores the previous crop.
+- Create, replace, adjust, and clear a crop.
+- Dimmed excluded area, corner handles, and source-pixel dimensions.
+- Escape cancels an active crop gesture; each completed edit undoes in one step.
+- Handles/dimensions are absent from exports.
 
 ## How to get to it (user POV)
 
-- Key `C` or the `Crop` toolbar button, then drag on the image.
+Press `C` or choose Crop, drag a region or a crop corner, and use Clear crop.
 
 ## Driving it with snipctl
 
-Preconditions:
+Preconditions: fixture snip in Fit (`key mod+0`).
 
-- Baseline snip open (600x300 two-color image).
-
-- **Set crop.** `snipctl key c`, `snipctl drag 0 0 300 300`, `snipctl shot crop-set`. The green half is dimmed; the blue half is outlined.
-- **Export is cropped.** `snipctl key mod+c`, `snipctl clipboard crop`, `snipctl inspect crop`. Expect `300x300 blue=90000 green=0`.
-- **Undo.** `snipctl key mod+z`, then copy and inspect again: back to `600x300`.
+- **Create/export.** `key c`, `drag 0 0 300 300`, `shot crop-result`.
+  The blue region is kept and green is dimmed. Copy once and inspect: 300×300,
+  showing the blue region and any annotations within it, without crop controls.
+- **History.** Undo restores the full image; redo restores the crop.
+- **Adjustment, when affected.** Drag a visible corner; the opposite corner stays
+  fixed. Check the minimum size, replacement, and Clear crop. Each undoes in one step.
+  Use a final export to check the resulting region; reuse the shared Copy/Save comparison.
+- **Zoom, when affected.** Adjust a corner after zoom/pan and check that the export
+  and displayed dimensions describe source pixels.
 
 ## Gotchas
 
-- The crop's far corner is exclusive: a drag to image point (300,300) keeps 300 px; a drag to (299,299) keeps 299.
-- Annotations outside the crop stay in the document and reappear if the crop is undone.
-- `crop-cancel` needs `Esc` while the button is held, which `snipctl drag` cannot do; report it as skipped.
+- Crop's far corner is exclusive: image point (300,300) keeps 300 pixels.
+- Annotations outside the crop reappear when it is cleared or undone.
+- Canceling a held drag needs Escape before release; `drag` does not expose that
+  timing. Use explicit desktop input or report the native path as untested.

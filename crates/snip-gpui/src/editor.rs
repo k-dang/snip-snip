@@ -45,6 +45,7 @@ const TEXT_SIZE: f32 = 20.0;
 /// Ignore accidental arrow clicks/jitter, measured at screenshot resolution.
 const MIN_ARROW_LENGTH: f32 = 3.0;
 const CANVAS_PADDING: f32 = 16.0;
+static VERIFY_VIEW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 const HIT_TOLERANCE: f32 = 4.0;
 const HANDLE_SIZE: f32 = 8.0;
 const HANDLE_HIT_RADIUS: f32 = 6.0;
@@ -769,7 +770,6 @@ impl Render for Editor {
                     .items_center()
                     .gap_2()
                     .border_b_1()
-                    // snipctl finds the canvas by this border's color.
                     .border_color(rgb(0x333336))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -856,6 +856,23 @@ impl Render for Editor {
                                 drag::track(window, this.clone(), Self::on_mouse_move, Self::on_mouse_up);
                                 if let Some(viewport) = viewport {
                                     paint_canvas(window, viewport, image_size, preview, overlay);
+                                    // Verification observes the painted transform; input still goes through the OS.
+                                    if *VERIFY_VIEW
+                                        .get_or_init(|| std::env::var_os("SNIP_SNIP_VERIFY").is_some())
+                                    {
+                                        let content = window.viewport_size();
+                                        eprintln!(
+                                            "snipctl-view: {} {} {} {} {} {} {} {}",
+                                            image_size.0,
+                                            image_size.1,
+                                            f32::from(viewport.origin.x),
+                                            f32::from(viewport.origin.y),
+                                            viewport.scale,
+                                            window.scale_factor(),
+                                            f32::from(content.width),
+                                            f32::from(content.height),
+                                        );
+                                    }
                                     if let Some(mut dimensions) = dimensions {
                                         dimensions.paint(window, cx);
                                     }
