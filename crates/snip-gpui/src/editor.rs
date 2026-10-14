@@ -3,7 +3,7 @@
 //! and exported image cannot drift apart. New ink, crop, caret, and selection
 //! controls are painted by GPUI on top.
 
-use std::{rc::Rc, sync::Arc, time::Instant};
+use std::{cell::Cell, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
     App, Bounds, Context, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
@@ -25,6 +25,7 @@ mod crop;
 mod export;
 mod navigation;
 mod text;
+mod toolbar;
 mod view;
 // GPUI's rendered-element selectors are only available in debug builds.
 #[cfg(all(test, debug_assertions))]
@@ -58,7 +59,7 @@ const DRAG_THRESHOLD: f32 = 3.0;
 pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
     let content = size(
         px(image.width() as f32 / scale + 2.0 * CANVAS_PADDING),
-        px(image.height() as f32 / scale + 2.0 * CANVAS_PADDING + 44.0),
+        px(image.height() as f32 / scale + 2.0 * CANVAS_PADDING + toolbar::HEIGHT + toolbar::STATUS_HEIGHT),
     );
     let max = cx
         .primary_display()
@@ -69,6 +70,7 @@ pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
         content.height.max(px(320.)).min(max.height * 0.85),
     );
     let options = WindowOptions {
+        window_min_size: Some(size(px(480.), px(320.))),
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, window_size, cx))),
         titlebar: Some(TitlebarOptions {
             title: Some("snip-snip".into()),
@@ -191,6 +193,12 @@ struct Editor {
     editing: Option<TextSession>,
     viewport: Rc<CanvasView>,
     focus: FocusHandle,
+    popup: Option<toolbar::Popup>,
+    /// Mouse-opened popovers return to the canvas; keyboard-opened ones to their trigger.
+    popup_return_focus: FocusHandle,
+    menu_focus: [FocusHandle; 3],
+    menu_bounds: [Rc<Cell<Bounds<gpui::Pixels>>>; 3],
+    popup_focus: FocusHandle,
     status: SharedString,
 }
 
@@ -227,7 +235,12 @@ impl Editor {
             space_held: false,
             editing: None,
             viewport: Rc::default(),
+            popup_return_focus: focus.clone(),
             focus,
+            popup: None,
+            menu_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            menu_bounds: std::array::from_fn(|_| Rc::new(Cell::new(Bounds::default()))),
+            popup_focus: cx.focus_handle(),
             status,
         }
     }
@@ -250,6 +263,7 @@ impl Editor {
     }
 
     fn set_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut Context<Self>) {
+        self.popup = None;
         self.cancel_gesture(window);
         self.finish_text(window);
         self.tool = tool;
@@ -257,6 +271,7 @@ impl Editor {
             self.selected = None;
         }
         self.update_cursor(window);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -608,6 +623,20 @@ impl Editor {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
+        if keystroke.key == "escape" && self.popup.is_some() {
+            self.dismiss_popup(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if keystroke.key == "tab" {
+            if keystroke.modifiers.shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         let shortcut = keystroke.modifiers.secondary();
         match (shortcut, keystroke.key.as_str()) {
             (true, "0") => return self.set_view(ViewPreset::Fit, window, cx),
@@ -679,6 +708,7 @@ impl Editor {
     }
 
     fn export(&mut self, window: &mut Window) -> RgbaImage {
+        self.popup = None;
         self.cancel_gesture(window);
         self.finish_text(window);
         self.update_cursor(window);
@@ -744,8 +774,7 @@ impl Render for Editor {
         let this = cx.entity();
         let editing = self.editing.is_some();
         let focus = self.focus.clone();
-        let zoom_label = self.viewport.zoom_label();
-        let painted_zoom_label = zoom_label.clone();
+        let painted_zoom_label = self.viewport.zoom_label();
 
         div()
             .size_full()
@@ -760,66 +789,7 @@ impl Render for Editor {
             .on_modifiers_changed(
                 cx.listener(|this, event, window, cx| this.on_modifiers_changed(event, window, cx)),
             )
-            .child(
-                div()
-                    .min_h(px(44.))
-                    .py_1p5()
-                    .px_3()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(0x333336))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            this.cancel_gesture(window);
-                            this.finish_text(window);
-                            this.update_cursor(window);
-                            cx.notify();
-                        }),
-                    )
-                    .child(self.tool_button("Select", "V", Tool::Select, cx))
-                    .child(self.tool_button("Pencil", "P", Tool::Pencil, cx))
-                    .child(self.tool_button("Arrow", "A", Tool::Arrow, cx))
-                    .child(self.tool_button("Rectangle", "R", Tool::Rectangle, cx))
-                    .child(self.tool_button("Text", "T", Tool::Text, cx))
-                    .child(self.tool_button("Crop", "C", Tool::Crop, cx))
-                    .when(self.tool == Tool::Crop, |toolbar| {
-                        toolbar.child(self.clear_crop_button(cx))
-                    })
-                    .child(self.color_controls(window, cx))
-                    .child(self.width_controls(window, cx))
-                    .child(self.view_button("Fit", ViewPreset::Fit, "0", cx))
-                    .child(self.view_button("100%", ViewPreset::ActualSize, "1", cx))
-                    .child(
-                        div()
-                            .debug_selector(|| "zoom-level".into())
-                            .w(px(54.))
-                            .flex_shrink_0()
-                            .text_color(rgb(0x9A9AA0))
-                            .child(zoom_label),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| self.status.to_string())
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(0x9A9AA0))
-                            .child(self.status.clone()),
-                    )
-                    .child(action_button("Copy", cx, |this, window, cx| {
-                        this.copy(false, window, cx)
-                    }))
-                    .child(action_button("Copy & Close", cx, |this, window, cx| {
-                        this.copy(true, window, cx)
-                    }))
-                    .child(action_button("Save…", cx, |this, window, cx| {
-                        this.save(window, cx)
-                    })),
-            )
+            .child(self.toolbar(window, cx))
             .child(
                 div()
                     .debug_selector(|| "editor-canvas".into())
@@ -889,6 +859,7 @@ impl Render for Editor {
                         .size_full(),
                     ),
             )
+            .child(self.status_line(window))
     }
 }
 
@@ -958,108 +929,6 @@ impl Editor {
         }
         cx.notify();
     }
-
-    fn color_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (active, _) = self.displayed_style(window);
-        div()
-            .flex()
-            .gap_1()
-            .flex_shrink_0()
-            .children(PALETTE.map(|(label, color)| {
-                button(label)
-                    .when(active == color, |b| {
-                        b.bg(rgb(0x3A3A3F)).border_color(rgb(0xAAAAAF))
-                    })
-                    .child(
-                        div()
-                            .size(px(12.))
-                            .rounded_full()
-                            .bg(to_hsla(color))
-                            .border_1()
-                            .border_color(rgb(0x77777D)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.prepare_style_change(window, cx);
-                        }),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_color(color, window, cx);
-                    }))
-            }))
-    }
-
-    fn width_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (_, active) = self.displayed_style(window);
-        let enabled = active.is_some();
-        div()
-            .flex()
-            .gap_1()
-            .flex_shrink_0()
-            .children(WIDTHS.map(|(label, width)| {
-                button(label)
-                    .when(active.is_some_and(|a| (a - width).abs() < 0.001), |b| {
-                        b.bg(rgb(0x3A3A3F)).border_color(rgb(0xAAAAAF))
-                    })
-                    .child(div().w(px(16.)).h(px(width)).rounded_full().bg(rgb(0xE6E6E6)))
-                    .when(!enabled, |b| b.opacity(0.4))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            if enabled {
-                                this.prepare_style_change(window, cx);
-                            }
-                        }),
-                    )
-                    .when(enabled, |b| {
-                        b.on_click(cx.listener(move |this, _, window, cx| {
-                            this.set_width(width, window, cx);
-                        }))
-                    })
-            }))
-    }
-
-    fn tool_button(
-        &self,
-        label: &'static str,
-        key: &'static str,
-        tool: Tool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let selected = self.tool == tool;
-        button(label)
-            .when(selected, |b| b.bg(rgb(0x3A3A3F)).border_color(rgb(0x55555C)))
-            .child(div().text_color(rgb(0x7A7A80)).text_xs().child(key))
-            .on_click(cx.listener(move |this, _, window, cx| this.set_tool(tool, window, cx)))
-    }
-}
-
-fn action_button(
-    label: &'static str,
-    cx: &mut Context<Editor>,
-    action: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>) + 'static,
-) -> impl IntoElement {
-    button(label).on_click(cx.listener(move |this, _, window, cx| action(this, window, cx)))
-}
-
-fn button(label: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(label)
-        .debug_selector(|| label.into())
-        .h(px(28.))
-        .flex_shrink_0()
-        .px_2p5()
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .rounded_md()
-        .border_1()
-        .border_color(gpui::transparent_black())
-        .hover(|s| s.bg(rgb(0x2C2C30)))
-        .child(label)
 }
 
 fn paint_canvas(

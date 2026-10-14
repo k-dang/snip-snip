@@ -40,6 +40,10 @@ Shortcut settings live in your per-user configuration folder under `snip-snip/sh
 
 ## Editing a snip
 
+The editor has a single dark toolbar with six tool icons, an **Ink and stroke** popover, a zoom menu showing the current percentage, and an **Export** menu. Hover over a tool for its name and shortcut. Use Tab / Shift+Tab to reach controls and Enter / Space to activate them. Press `Esc` or click outside to close a popover.
+
+The status line below the canvas shows the current style, image dimensions, and operation feedback.
+
 Choose a tool from the toolbar or use its keyboard shortcut:
 
 | Key | Tool | How to use it |
@@ -57,7 +61,7 @@ Select an annotation to move it or change its style. Arrows have a handle at eac
 
 To edit existing text, click it with the Text tool or double-click it with Select. Click inside the label to place the caret, or use the arrow keys and Home/End to move it.
 
-The toolbar has five ink colors—red, yellow, green, blue, and black—and three stroke widths: Thin, Medium, and Thick. New editors start with red ink and Medium strokes. All annotation tools share the color; pencil, arrow, and rectangle also share the stroke width. Text keeps its existing font size and weight, so stroke width controls are disabled for it.
+The **Ink and stroke** popover has five ink colors—red, yellow, green, blue, and black—and three stroke widths: Thin, Medium, and Thick. New editors start with red ink and Medium strokes. All annotation tools share the color; pencil, arrow, and rectangle also share the stroke width. Text keeps its existing font size and weight, so stroke width controls are disabled for it.
 
 Choosing a color or width changes the selected annotation and sets the style for the next marks you draw. Selecting an annotation shows its style without changing those defaults. If you choose a color while typing, the app finishes the text edit and selects the label for recoloring.
 
@@ -65,13 +69,13 @@ Use `Ctrl/Cmd+Z` to undo and `Ctrl/Cmd+Shift+Z` to redo. On Windows, `Ctrl+Y` al
 
 ### Cropping
 
-Cropping keeps the original screenshot and annotations available, so you can adjust the crop later. With Crop selected, drag a corner handle to resize the crop, drag elsewhere on the image to replace it, or choose **Clear crop** to restore the full image.
+Cropping keeps the original screenshot and annotations available, so you can adjust the crop later. With Crop selected, drag a corner handle to resize the crop, drag elsewhere on the image to replace it, or choose **Clear crop** in the **Ink and stroke** popover to restore the full image.
 
 When you resize, the opposite corner stays in place and each side stays at least one pixel long. The dimensions shown while dragging are screenshot pixels, regardless of zoom or display scaling. Press `Esc` to cancel a crop drag. Creating, adjusting, replacing, or clearing a crop can each be undone in one step.
 
 ### Zooming and panning
 
-New editors start in Fit view, showing the whole screenshot and adjusting as you resize the window. Use the toolbar's **Fit** and **100%** controls or these shortcuts to change the view:
+New editors start in Fit view, showing the whole screenshot and adjusting as you resize the window. Open the toolbar's zoom menu and choose **Fit** or **100%**, or use these shortcuts to change the view:
 
 | Shortcut | Action |
 | --- | --- |
@@ -88,13 +92,15 @@ While editing text, Space types normally, and zooming keeps the text session and
 
 ## Copying and saving
 
+Open the toolbar's **Export** menu to choose **Copy**, **Copy & Close**, or **Save**, or use these shortcuts:
+
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl/Cmd+C` | Copy the image and keep editing. |
 | `Ctrl/Cmd+Shift+C` | Copy the image and close the editor. |
 | `Ctrl/Cmd+S` | Save the image as a PNG. |
 
-Copy puts the image on the clipboard as PNG and DIB so it can be pasted into most apps. **Copy & Close** closes the editor only after the copy succeeds, and the copied image remains on the clipboard afterward. If another app has reserved its shortcut, use the toolbar button.
+Copy puts the image on the clipboard as PNG and DIB so it can be pasted into most apps. **Copy & Close** closes the editor only after the copy succeeds, and the copied image remains on the clipboard afterward. If another app has reserved its shortcut, use the **Export** menu.
 
 Save opens your native file picker in a `snip-snip` folder under Pictures, creating the folder on your first save. If Pictures isn't available, it uses a `snip-snip` folder under your home directory. The suggested filename includes the local export time, such as `snip-2026-10-11_23-59-59-007.png`, with a numeric suffix if that name already exists. You can change the filename or destination in the picker.
 
@@ -102,7 +108,7 @@ Saving keeps the editor open and shows the saved path. Canceling the picker take
 
 All three actions finish any text edit and cancel unfinished drags before exporting. Selection outlines, annotation handles, and crop guides are left out of the result. The background app stays ready for your next snip.
 
-In the editor, `Esc` handles whatever you're doing first: it finishes text editing, cancels a drag, clears the selection, or closes the editor, in that order.
+In the editor, `Esc` handles whatever you're doing first: it closes an open popover, finishes text editing, cancels a drag, clears the selection, or closes the editor, in that order.
 
 ## Project layout
 
