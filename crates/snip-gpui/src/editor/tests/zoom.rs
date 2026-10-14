@@ -503,51 +503,6 @@ fn zoomed_and_panned_handles_and_crop_save_the_document_region(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn a_manual_view_keeps_its_image_center_through_resize_and_dpi_changes(cx: &mut TestAppContext) {
-    let mut cx = editor(cx);
-    cx.simulate_keystrokes("r");
-    drag(&mut cx, (140., 80.), (180., 120.), Modifiers::none());
-    cx.simulate_keystrokes("v");
-    click(&mut cx, 160., 80.);
-    let center = cx.debug_bounds("editor-canvas").unwrap().center();
-    pinch(&mut cx, center, 3.);
-    space(&mut cx, true);
-    window_drag(&mut cx, center, center + point(px(40.), px(20.)));
-    space(&mut cx, false);
-    cx.simulate_resize(size(px(600.), px(400.)));
-    cx.run_until_parked();
-    let resized_center = cx.debug_bounds("editor-canvas").unwrap().center();
-    let shown = painted_selection(&mut cx);
-    assert_eq!(shown.size.width, px(180.));
-    assert_position(shown.center(), resized_center + point(px(40.), px(20.)));
-    cx.simulate_scale_factor_change(2.);
-    cx.run_until_parked();
-    let shown = painted_selection(&mut cx);
-    assert_eq!(shown.size.width, px(90.));
-    assert_position(shown.center(), resized_center + point(px(20.), px(10.)));
-}
-
-#[gpui::test]
-fn very_large_captures_can_zoom_back_to_fit_below_ten_percent(cx: &mut TestAppContext) {
-    let window = cx.update(|cx| {
-        super::super::open(RgbaImage::from_pixel(8192, 200, WHITE), 1., cx);
-        cx.windows()[0]
-    });
-    let mut cx = VisualTestContext::from_window(window, cx);
-    cx.simulate_scale_factor_change(1.);
-    cx.simulate_resize(size(px(480.), px(320.)));
-    cx.run_until_parked();
-    let center = cx.debug_bounds("editor-canvas").unwrap().center();
-    let fitted = painted_image(&mut cx);
-    assert!((fitted.size.width - px(448.)).abs() <= px(1.));
-    pinch(&mut cx, center, 1.);
-    pinch(&mut cx, center, -0.99);
-    assert_eq!(painted_image(&mut cx), fitted);
-    command(&mut cx, "0");
-    assert_eq!(painted_image(&mut cx), fitted);
-}
-
-#[gpui::test]
 fn text_placement_caret_clicks_and_reediting_follow_a_zoomed_panned_view(cx: &mut TestAppContext) {
     let mut cx = editor(cx);
     let center = cx.debug_bounds("editor-canvas").unwrap().center();

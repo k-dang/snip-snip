@@ -5,7 +5,7 @@ use gpui::{
     Stateful, Window, anchored, canvas, deferred, div, point, prelude::*, px, rgb,
 };
 
-use super::{Editor, Gesture, PALETTE, Tool, WIDTHS, to_hsla, view::ViewPreset};
+use super::{Editor, PALETTE, Tool, WIDTHS, to_hsla, view::ViewPreset};
 
 pub(super) const HEIGHT: f32 = 52.;
 pub(super) const STATUS_HEIGHT: f32 = 24.;
@@ -69,9 +69,9 @@ impl Editor {
                         .justify_center()
                         .hover(|s| s.bg(rgb(HOVER)))
                         .aria_keyshortcuts(key)
-                        .aria_selected(self.tool == tool)
+                        .aria_selected(self.model.tool() == tool)
                         .tooltip(move |_, cx| tooltip(format!("{label} · {key}"), cx))
-                        .when(self.tool == tool, |b| {
+                        .when(self.model.tool() == tool, |b| {
                             b.bg(rgb(SELECTED)).border_color(rgb(0x657B86))
                         })
                         .child(icon(glyph, rgb(0xE5EAED)))
@@ -92,7 +92,7 @@ impl Editor {
                     .child(
                         div()
                             .w(px(14.))
-                            .h(px(width.unwrap_or(self.ink_width)))
+                            .h(px(width.unwrap_or(self.model.ink_width())))
                             .rounded_full()
                             .bg(rgb(0xE5EAED)),
                     )
@@ -140,7 +140,7 @@ impl Editor {
             .iter()
             .find(|(_, w)| width.is_some_and(|v| (v - *w).abs() < 0.001))
             .map(|(n, _)| *n);
-        let style = match self.tool {
+        let style = match self.model.tool() {
             Tool::Crop => "Crop".to_owned(),
             _ => format!(
                 "{name}{}",
@@ -207,7 +207,6 @@ impl Editor {
             MouseButton::Left,
             cx.listener(|this, _, window, cx| {
                 this.cancel_gesture(window);
-                this.update_cursor(window);
                 cx.notify();
             }),
         )
@@ -286,7 +285,6 @@ impl Editor {
             .child(heading("Ink"))
             .child(div().flex().gap_2().children(PALETTE.map(|(label, color)| {
                 control(label, true, cx, move |this, window, cx, _| {
-                    this.prepare_style_change(window, cx);
                     this.set_color(color, window, cx);
                 })
                 .size(px(34.))
@@ -307,7 +305,6 @@ impl Editor {
             .child(heading("Stroke"))
             .child(div().flex().gap_1().children(WIDTHS.map(|(label, value)| {
                 control(label, width.is_some(), cx, move |this, window, cx, _| {
-                    this.prepare_style_change(window, cx);
                     this.set_width(value, window, cx);
                 })
                 .flex_1()
@@ -328,7 +325,9 @@ impl Editor {
             } else {
                 "Shared across drawing tools."
             }))
-            .when(self.tool == Tool::Crop, |d| d.child(self.clear_crop_button(cx)))
+            .when(self.model.tool() == Tool::Crop, |d| {
+                d.child(self.clear_crop_button(cx))
+            })
     }
 
     fn zoom_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -344,7 +343,7 @@ impl Editor {
                 ]
                 .map(|(label, preset, key)| {
                     menu_item(label, shortcut(key), cx, move |this, window, cx, _| {
-                        if matches!(this.gesture, Some(Gesture::Crop(_))) {
+                        if this.model.is_cropping() {
                             this.cancel_gesture(window);
                         }
                         this.popup = None;

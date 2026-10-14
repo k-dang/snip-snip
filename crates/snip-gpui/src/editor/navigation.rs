@@ -2,7 +2,7 @@
 
 use gpui::{Context, KeyUpEvent, PinchEvent, ScrollDelta, ScrollWheelEvent, Window};
 
-use super::{Editor, Gesture, view::ViewPreset};
+use super::{Editor, view::ViewPreset};
 
 impl Editor {
     pub(super) fn on_scroll(
@@ -11,7 +11,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !event.modifiers.secondary() || self.gesture.is_some() {
+        if !event.modifiers.secondary() || self.has_gesture() {
             return;
         }
         let steps = match event.delta {
@@ -22,7 +22,7 @@ impl Editor {
     }
 
     pub(super) fn on_pinch(&mut self, event: &PinchEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.gesture.is_none() {
+        if !self.has_gesture() {
             self.zoom(event.position, 1. + event.delta, window, cx);
         }
     }
@@ -42,7 +42,7 @@ impl Editor {
     }
 
     pub(super) fn set_view(&mut self, preset: ViewPreset, window: &mut Window, cx: &mut Context<Self>) {
-        if self.gesture.is_none() {
+        if !self.has_gesture() {
             self.viewport.reset(preset);
             self.update_cursor(window);
             cx.notify();
@@ -59,9 +59,7 @@ impl Editor {
     /// Key release and focus loss both end temporary pan at its current position.
     pub(super) fn release_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.space_held = false;
-        if matches!(self.gesture, Some(Gesture::Pan(_))) {
-            self.gesture = None;
-        }
+        self.pan = None;
         self.update_cursor(window);
         cx.notify();
     }
