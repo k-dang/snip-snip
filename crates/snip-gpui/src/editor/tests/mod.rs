@@ -55,10 +55,38 @@ fn command(cx: &mut VisualTestContext, key: &str) {
     cx.simulate_keystrokes(&format!("{modifier}-{key}"));
 }
 
+fn press_keys(cx: &mut VisualTestContext, keys: &str) {
+    for key in keys.split_whitespace() {
+        cx.simulate_keystrokes(key);
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse(key).unwrap(),
+        });
+    }
+}
+
 fn toolbar(cx: &mut VisualTestContext, label: &'static str) {
+    if cx.debug_bounds(label).is_none() {
+        let trigger = match label {
+            "Red" | "Yellow" | "Green" | "Blue" | "Black" | "Thin" | "Medium" | "Thick" | "Clear crop" => {
+                "Ink and stroke"
+            }
+            "Fit" | "100%" => "Zoom",
+            "Copy" | "Copy & Close" | "Save…" => "Export",
+            _ => panic!("missing toolbar control {label}"),
+        };
+        toolbar(cx, trigger);
+    }
     let position = cx.debug_bounds(label).expect("rendered toolbar control").center();
     cx.simulate_mouse_move(position, None, Modifiers::none());
     cx.simulate_click(position, Modifiers::none());
+    if !matches!(label, "Ink and stroke" | "Zoom" | "Export" | "Copy & Close")
+        && cx.debug_bounds("toolbar-popover").is_some()
+    {
+        // Finish choosing options before drawing; the popover intentionally
+        // receives pointer input over the part of the canvas it covers.
+        let outside = cx.debug_bounds("editor-toolbar").unwrap().origin + point(px(1.), px(1.));
+        cx.simulate_click(outside, Modifiers::none());
+    }
 }
 
 #[gpui::test]
@@ -251,14 +279,18 @@ fn selection_and_no_op_style_choices_preserve_defaults_and_redo(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContext) {
+fn toolbar_stays_in_one_row_and_popovers_fit_at_minimum_window_size(cx: &mut TestAppContext) {
     let mut cx = editor(cx);
     cx.simulate_keystrokes("c");
     for scale in [1.0, 2.0] {
         cx.simulate_scale_factor_change(scale);
         cx.simulate_resize(size(px(480.0), px(320.0)));
         cx.run_until_parked();
+        let bar = cx.debug_bounds("editor-toolbar").unwrap();
+        assert_eq!(bar.size.height, px(52.));
         let canvas = cx.debug_bounds("editor-canvas").unwrap();
+        assert!(canvas.size.height > px(200.));
+        let row_y = cx.debug_bounds("Select").unwrap().center().y;
         let mut controls = Vec::new();
         for label in [
             "Select",
@@ -267,38 +299,102 @@ fn style_controls_remain_reachable_at_minimum_window_size(cx: &mut TestAppContex
             "Rectangle",
             "Text",
             "Crop",
-            "Clear crop",
-            "Red",
-            "Yellow",
-            "Green",
-            "Blue",
-            "Black",
-            "Thin",
-            "Medium",
-            "Thick",
-            "Fit",
-            "100%",
-            "zoom-level",
-            "Copy",
-            "Copy & Close",
-            "Save…",
+            "Ink and stroke",
+            "Zoom",
+            "Export",
         ] {
             let bounds = cx.debug_bounds(label).expect(label);
             assert!(
-                bounds.left() >= px(0.) && bounds.right() <= px(480.),
+                bounds.left() >= bar.left() && bounds.right() <= bar.right(),
                 "{label} fits horizontally"
             );
-            assert!(
-                bounds.top() >= px(0.) && bounds.bottom() <= canvas.top(),
-                "{label} stays above canvas"
-            );
+            assert_eq!(bounds.center().y, row_y);
             for (other, previous) in &controls {
                 assert!(!bounds.intersects(previous), "{label} overlaps {other}");
             }
             controls.push((label, bounds));
         }
-        assert!(canvas.size.height > px(32.), "canvas retains drawing space");
+        for (trigger, items) in [
+            (
+                "Ink and stroke",
+                &[
+                    "Red",
+                    "Yellow",
+                    "Green",
+                    "Blue",
+                    "Black",
+                    "Thin",
+                    "Medium",
+                    "Thick",
+                    "Clear crop",
+                ][..],
+            ),
+            ("Zoom", &["Fit", "100%"][..]),
+            ("Export", &["Copy", "Copy & Close", "Save…"][..]),
+        ] {
+            toolbar(&mut cx, trigger);
+            let popup = cx.debug_bounds("toolbar-popover").unwrap();
+            assert!(popup.left() >= px(0.) && popup.right() <= px(480.));
+            assert!(
+                popup.top() >= bar.bottom() && popup.bottom() <= px(320.),
+                "{trigger}: popup {popup:?}, bar {bar:?}"
+            );
+            for &label in items {
+                let bounds = cx.debug_bounds(label).expect(label);
+                assert!(
+                    bounds.left() >= popup.left() && bounds.right() <= popup.right(),
+                    "{label} inside popup"
+                );
+            }
+            cx.simulate_keystrokes("escape");
+            assert!(cx.debug_bounds("toolbar-popover").is_none());
+        }
     }
+}
+
+#[gpui::test]
+fn menus_dismiss_before_escape_closes_the_editor_and_allow_keyboard_export(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    // Six tool buttons precede Ink, Zoom, and Export in tab order.
+    press_keys(&mut cx, "tab tab tab tab tab tab tab enter");
+    assert!(cx.debug_bounds("Red").is_some());
+    press_keys(&mut cx, "escape");
+    assert!(cx.debug_bounds("Red").is_none());
+    assert!(cx.debug_bounds("editor-canvas").is_some());
+    press_keys(&mut cx, "tab space");
+    assert!(cx.debug_bounds("Fit").is_some());
+    press_keys(&mut cx, "escape tab enter tab enter");
+    assert!(cx.debug_bounds("Copied to clipboard").is_some());
+    assert!(cx.debug_bounds("toolbar-popover").is_none());
+    toolbar(&mut cx, "Ink and stroke");
+    toolbar(&mut cx, "Ink and stroke");
+    assert!(
+        cx.debug_bounds("toolbar-popover").is_none(),
+        "the trigger toggles its own popup"
+    );
+    toolbar(&mut cx, "Ink and stroke");
+    click(&mut cx, 150., 150.);
+    assert!(cx.debug_bounds("toolbar-popover").is_none());
+}
+
+#[gpui::test]
+fn dismissing_a_mouse_opened_popover_preserves_live_text_input(cx: &mut TestAppContext) {
+    let mut cx = editor(cx);
+    cx.simulate_keystrokes("t");
+    click(&mut cx, 20., 120.);
+    cx.simulate_input("A");
+    toolbar(&mut cx, "Ink and stroke");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_input("B");
+    assert_image(
+        saved(&mut cx),
+        &expected(vec![Annotation::Text(Text {
+            origin: Point::new(20., 120.),
+            content: "AB".into(),
+            size: 20.,
+            color: INK,
+        })]),
+    );
 }
 
 #[gpui::test]

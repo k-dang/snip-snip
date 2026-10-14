@@ -1,12 +1,12 @@
 //! Crop gestures retain their starting geometry so live adjustment never drifts.
 
 use gpui::{
-    AnyElement, App, AvailableSpace, Bounds, Context, CursorStyle, MouseButton, Pixels, Window, div, point,
-    prelude::*, px, rgb, size,
+    AnyElement, App, AvailableSpace, Bounds, Context, CursorStyle, Pixels, Window, div, point, prelude::*,
+    px, rgb, size,
 };
 use snip_core::{Point, Rect};
 
-use super::{DRAG_THRESHOLD, Editor, Gesture, HANDLE_HIT_RADIUS, Handle, Viewport, button};
+use super::{DRAG_THRESHOLD, Editor, Gesture, HANDLE_HIT_RADIUS, Handle, Viewport, toolbar::control};
 
 pub(super) enum CropGesture {
     Create {
@@ -151,29 +151,20 @@ pub(super) fn prepaint_dimensions(
 impl Editor {
     pub(super) fn clear_crop_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.doc.crop.is_some();
-        button("Clear crop")
-            .when(!enabled, |button| button.opacity(0.4))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    if enabled {
-                        this.cancel_gesture(window);
-                        this.finish_text(window);
-                        window.focus(&this.focus, cx);
-                        this.update_cursor(window);
-                        cx.notify();
-                    }
-                }),
-            )
-            .when(enabled, |button| {
-                button.on_click(cx.listener(|this, _, window, cx| {
-                    this.doc.crop = None;
-                    this.history.commit(&this.doc);
-                    this.update_cursor(window);
-                    cx.notify();
-                }))
-            })
+        control("Clear crop", enabled, cx, |this, window, cx, _| {
+            this.cancel_gesture(window);
+            this.finish_text(window);
+            this.doc.crop = None;
+            this.history.commit(&this.doc);
+            this.popup = None;
+            window.focus(&this.focus, cx);
+            this.update_cursor(window);
+            cx.notify();
+        })
+        .w_full()
+        .px_2()
+        .when(enabled, |b| b.hover(|s| s.bg(rgb(super::toolbar::HOVER))))
+        .child("Clear crop")
     }
 
     pub(super) fn crop_handle_at(&self, p: Point, scale: f32) -> Option<(Point, Handle)> {

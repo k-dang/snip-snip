@@ -1,10 +1,8 @@
 //! View controls and platform input for navigating the editor canvas.
 
-use gpui::{
-    Context, KeyUpEvent, MouseButton, PinchEvent, ScrollDelta, ScrollWheelEvent, Window, div, prelude::*, rgb,
-};
+use gpui::{Context, KeyUpEvent, PinchEvent, ScrollDelta, ScrollWheelEvent, Window};
 
-use super::{Editor, Gesture, button, view::ViewPreset};
+use super::{Editor, Gesture, view::ViewPreset};
 
 impl Editor {
     pub(super) fn on_scroll(
@@ -66,32 +64,6 @@ impl Editor {
         }
         self.update_cursor(window);
         cx.notify();
-    }
-
-    pub(super) fn view_button(
-        &self,
-        label: &'static str,
-        preset: ViewPreset,
-        key: &'static str,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        button(label)
-            .child(div().text_color(rgb(0x7A7A80)).text_xs().child(format!(
-                "{}+{key}",
-                if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
-            )))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    if matches!(this.gesture, Some(Gesture::Crop(_))) {
-                        this.cancel_gesture(window);
-                        this.update_cursor(window);
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| this.set_view(preset, window, cx)))
     }
 }
 

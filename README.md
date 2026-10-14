@@ -53,6 +53,15 @@ keys you actually press; changing the input source keeps that binding.
 
 ## Usage
 
+The editor has a single dark toolbar: six tool icons, an **Ink and stroke**
+popover, a zoom menu showing the current percentage, and an **Export** menu
+for Copy, Copy & Close, and Save. Hover over a tool for its name and shortcut.
+Use Tab / Shift+Tab to reach controls and Enter / Space to activate them.
+Escape closes an open popover first; clicking outside also dismisses it.
+With Crop active, **Clear crop** is in the Ink and stroke popover. The status
+line below the canvas shows the current style, image dimensions, and operation
+feedback.
+
 | Where | Key | Action |
 | --- | --- | --- |
 | Anywhere | Configured shortcut (initially `Alt+Shift+S`) | Start a snip |
