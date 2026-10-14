@@ -14,7 +14,7 @@ pub(super) enum ViewPreset {
 }
 
 /// Logical window coordinates per screenshot pixel, shared by painting and input.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Viewport {
     pub origin: gpui::Point<Pixels>,
     pub scale: f32,
@@ -218,5 +218,45 @@ impl CanvasView {
         layout.constrain(&mut viewport);
         self.commit(layout, viewport, true);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::size;
+
+    #[test]
+    fn a_manual_view_keeps_its_image_center_through_resize_and_dpi_changes() {
+        let view = CanvasView::default();
+        let canvas = Bounds::new(point(px(0.), px(52.)), size(px(900.), px(524.)));
+        view.resolve(canvas, (320, 200), 1.).unwrap();
+        view.zoom(canvas.center(), 4.);
+        let pan = view.begin_pan(canvas.center()).unwrap();
+        view.pan(&pan, canvas.center() + point(px(40.), px(20.)));
+        let center = view.get().unwrap().to_image(canvas.center());
+        let resized = Bounds::new(canvas.origin, size(px(600.), px(324.)));
+        for device_scale in [1., 2.] {
+            let viewport = view.resolve(resized, (320, 200), device_scale).unwrap();
+            assert_eq!(viewport.to_image(resized.center()), center);
+            assert_eq!(viewport.scale * device_scale, 4.);
+            assert_eq!(
+                viewport.to_window(Point::new(160., 100.)),
+                resized.center() + point(px(40. / device_scale), px(20. / device_scale))
+            );
+        }
+    }
+
+    #[test]
+    fn very_large_captures_can_zoom_back_to_fit_below_ten_percent() {
+        let view = CanvasView::default();
+        let canvas = Bounds::new(point(px(0.), px(52.)), size(px(480.), px(244.)));
+        let fitted = view.resolve(canvas, (8192, 200), 1.).unwrap();
+        assert_eq!(8192. * fitted.scale, 448.);
+        view.zoom(canvas.center(), 2.);
+        view.zoom(canvas.center(), 0.01);
+        assert_eq!(view.get().unwrap(), fitted);
+        view.reset(ViewPreset::Fit);
+        assert_eq!(view.get().unwrap(), fitted);
     }
 }

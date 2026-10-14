@@ -113,7 +113,7 @@ In the editor, `Esc` handles whatever you're doing first: it closes an open popo
 ## Project layout
 
 - **`crates/snip-core`** contains the document model, renderer, geometry queries, and snapshot history. It uses tiny-skia and cosmic-text with a bundled Inter font, has no UI dependencies, and is covered by integration tests.
-- **`crates/snip-gpui`** contains the app: the global shortcut, screen capture through xcap, the frozen-screen selection overlay, and the editor. It builds the `snip-snip` binary.
+- **`crates/snip-gpui`** contains the app: the global shortcut, screen capture through xcap, the frozen-screen selection overlay, and the editor. The editor's `editing` module owns document changes and undo without depending on GPUI; the window handles input, focus, navigation, and painting. It builds the `snip-snip` binary.
 
 ## Development
 
