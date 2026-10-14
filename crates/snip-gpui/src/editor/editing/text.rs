@@ -1,8 +1,11 @@
 //! Text sessions use byte offsets internally and UTF-16 at the input interface.
-use super::Editing;
-use snip_core::{Annotation, Color, Document, Point, Renderer, Text};
+
 use std::ops::Range;
+
+use snip_core::{Annotation, Color, Document, Point, Renderer, Text};
 use unicode_segmentation::UnicodeSegmentation;
+
+use super::Editing;
 
 /// The text annotation receiving keystrokes. Offsets are bytes into its
 /// content, on grapheme boundaries.
@@ -16,12 +19,12 @@ pub(super) struct TextSession {
 }
 
 /// The caret and IME composition underline, in image pixels.
-pub(crate) struct TextOverlay {
+pub(in crate::editor) struct TextOverlay {
     /// Caret top and height.
-    pub(crate) caret: (Point, f32),
+    pub caret: (Point, f32),
     /// Underline start and width, under the text being composed.
-    pub(crate) composition: Option<(Point, f32)>,
-    pub(crate) color: Color,
+    pub composition: Option<(Point, f32)>,
+    pub color: Color,
 }
 
 /// Keyboard edits that don't insert text; typed text uses the input handler.
@@ -247,9 +250,7 @@ impl Editing {
             color: text.color,
         })
     }
-}
 
-impl Editing {
     pub fn text_for_range(
         &mut self,
         range: Range<usize>,

@@ -1,9 +1,11 @@
-//! Crop dimensions and toolbar controls. Geometry belongs to Editing.
-use super::{Editor, Viewport, toolbar::control};
+//! Crop dimensions and toolbar controls.
+
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, Context, Pixels, Window, div, point, prelude::*, px, rgb, size,
 };
 use snip_core::Rect;
+
+use super::{Editor, Viewport, toolbar::control};
 
 /// Lay out the live label before painting, keeping it readable at canvas edges.
 pub(super) fn prepaint_dimensions(

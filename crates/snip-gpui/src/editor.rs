@@ -133,7 +133,7 @@ impl Editor {
         }
     }
 
-    /// Synchronize pixels and input affordances after an editing operation.
+    /// Update the preview and cursor after an edit.
     fn refresh(&mut self, window: &mut Window) -> bool {
         let started = Instant::now();
         if let Some(composite) = self.model.take_preview() {

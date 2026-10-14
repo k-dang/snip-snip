@@ -1,5 +1,4 @@
 //! Document editing and interaction rules, independent of window events and painting.
-//! Editing owns mutable document state; callers can only read the document.
 
 use snip_core::{
     Annotation, Arrow, Color, Document, History, Point, Rect, Rectangle, Renderer, RgbaImage, Stroke, Text,
@@ -92,7 +91,7 @@ fn valid_annotation(annotation: &Annotation) -> bool {
     }
 }
 
-/// The document's pointer affordance; the window maps it to a native cursor.
+/// Cursor intent without a dependency on native window types.
 pub(super) enum PointerHint {
     Arrow,
     Crosshair,
@@ -151,24 +150,31 @@ impl Editing {
     pub fn document(&self) -> &Document {
         &self.doc
     }
+
     pub fn tool(&self) -> Tool {
         self.tool
     }
+
     pub fn ink_width(&self) -> f32 {
         self.ink_width
     }
+
     pub fn has_gesture(&self) -> bool {
         self.gesture.is_some()
     }
+
     pub fn is_cropping(&self) -> bool {
         matches!(self.gesture, Some(Gesture::Crop(_)))
     }
+
     pub fn is_editing_text(&self) -> bool {
         self.editing.is_some()
     }
+
     pub fn has_selection(&self) -> bool {
         self.selected.is_some()
     }
+
     pub fn clear_selection(&mut self) {
         self.selected = None;
     }

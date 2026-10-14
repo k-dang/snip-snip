@@ -1,6 +1,8 @@
 //! Crop edits retain their starting geometry so live adjustment never drifts.
-use super::{DRAG_THRESHOLD, Editing, Gesture, HANDLE_HIT_RADIUS, Handle, PointerHint};
+
 use snip_core::{Point, Rect};
+
+use super::{DRAG_THRESHOLD, Editing, Gesture, HANDLE_HIT_RADIUS, Handle, PointerHint};
 
 pub(super) enum CropGesture {
     Create {
@@ -63,7 +65,7 @@ impl CropGesture {
     }
 }
 
-pub(crate) fn crop_handles(crop: Rect) -> [(Point, Handle); 4] {
+pub(in crate::editor) fn crop_handles(crop: Rect) -> [(Point, Handle); 4] {
     let (left, top) = (crop.x as f32, crop.y as f32);
     let (right, bottom) = ((crop.x + crop.width) as f32, (crop.y + crop.height) as f32);
     let corners = [

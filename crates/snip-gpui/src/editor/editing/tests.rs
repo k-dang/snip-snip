@@ -1,6 +1,6 @@
-//! Editing rules are exercised through the same interface as the window.
-use super::{Editing, Tool};
 use snip_core::{Point, RgbaImage};
+
+use super::{Editing, Tool};
 
 fn drag(model: &mut Editing, from: Point, to: Point) {
     model.pointer_down(from, 1., 1., false);
@@ -10,7 +10,8 @@ fn drag(model: &mut Editing, from: Point, to: Point) {
 
 fn select(model: &mut Editing, position: Point) {
     model.set_tool(Tool::Select);
-    drag(model, position, position);
+    model.pointer_down(position, 1., 1., false);
+    model.finish_gesture();
 }
 
 #[test]

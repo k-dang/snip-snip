@@ -1,8 +1,10 @@
 //! Translate GPUI's OS text input into editing operations and window coordinates.
 
-use super::Editor;
-use gpui::{Bounds, Context, EntityInputHandler, Pixels, UTF16Selection, Window, px, size};
 use std::ops::Range;
+
+use gpui::{Bounds, Context, EntityInputHandler, Pixels, UTF16Selection, Window, px, size};
+
+use super::Editor;
 
 impl EntityInputHandler for Editor {
     fn text_for_range(
