@@ -1,5 +1,7 @@
 //! Screenshot capture and annotation, available through the native tray/menu bar.
 
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod capture;
 mod drag;
 mod editor;
