@@ -184,24 +184,23 @@ impl Drop for NativeShell {
 }
 
 fn icon() -> Result<Icon> {
-    // A transparent crop-frame glyph. AppKit treats its alpha as a template;
-    // Windows gets white ink with a dark outline for light/dark taskbars.
+    // Four open corners on a transparent background. AppKit uses the alpha as
+    // a template; Windows gets white strokes over a one-pixel dark outline.
     let mut pixels = vec![0_u8; 32 * 32 * 4];
-    for y in 0..32_usize {
-        for x in 0..32_usize {
-            let corner = ((5..=8).contains(&x) || (23..=26).contains(&x))
-                && ((5..=13).contains(&y) || (18..=26).contains(&y))
-                || ((5..=8).contains(&y) || (23..=26).contains(&y))
-                    && ((5..=13).contains(&x) || (18..=26).contains(&x));
-            let center = (14..=17).contains(&x) && (14..=17).contains(&y);
-            if corner || center {
-                let ink = if cfg!(target_os = "macos") || x == 5 || x == 26 || y == 5 || y == 26 {
-                    30
-                } else {
-                    245
-                };
-                let offset = (y * 32 + x) * 4;
-                pixels[offset..offset + 4].copy_from_slice(&[ink, ink, ink, 255]);
+    let layers: &[(usize, u8)] = if cfg!(target_os = "macos") {
+        &[(0, 30)]
+    } else {
+        &[(1, 30), (0, 245)]
+    };
+    for &(padding, ink) in layers {
+        let side = |n| (4 - padding..8 + padding).contains(&n) || (24 - padding..28 + padding).contains(&n);
+        let arm = |n| (4 - padding..14 + padding).contains(&n) || (18 - padding..28 + padding).contains(&n);
+        for y in 0..32_usize {
+            for x in 0..32_usize {
+                if side(x) && arm(y) || side(y) && arm(x) {
+                    let offset = (y * 32 + x) * 4;
+                    pixels[offset..offset + 4].copy_from_slice(&[ink, ink, ink, 255]);
+                }
             }
         }
     }
