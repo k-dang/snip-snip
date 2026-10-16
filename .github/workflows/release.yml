@@ -47,8 +47,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
-      - name: Build Windows ZIP
-        run: ./scripts/package-windows.ps1
+      - name: Build signed Windows ZIP
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: ./scripts/package-windows.ps1 -Sign
 
       - name: Attach ZIP to draft release
         env:

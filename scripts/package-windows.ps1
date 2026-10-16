@@ -1,8 +1,14 @@
+param([switch]$Sign)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($env:OS -ne 'Windows_NT') {
     throw 'Build the Windows ZIP on Windows with the MSVC toolchain and Windows SDK installed.'
+}
+
+if ($Sign -and ([string]::IsNullOrEmpty($env:WINDOWS_SIGNING_PFX_BASE64) -or [string]::IsNullOrEmpty($env:WINDOWS_SIGNING_PASSWORD))) {
+    throw 'Signing requires WINDOWS_SIGNING_PFX_BASE64 and WINDOWS_SIGNING_PASSWORD.'
 }
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -22,6 +28,9 @@ try {
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
     $binary = Join-Path $metadata.target_directory "$releaseTarget/release/snip-snip.exe"
+    if ($Sign) {
+        & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path $binary
+    }
     $zip = Join-Path $dist "snip-snip-$version-windows-x64.zip"
     Compress-Archive -LiteralPath @(
         $binary,
