@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64 ZIP
+    runs-on: windows-2025
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      RELEASE_TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check tag matches app version
+        run: |
+          $metadata = (& cargo metadata --locked --no-deps --format-version 1) | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Reading Cargo metadata failed.' }
+          $version = ($metadata.packages | Where-Object name -eq 'snip-gpui').version
+          if ($env:RELEASE_TAG -cne "v$version") {
+              throw "Tag $env:RELEASE_TAG must match app version v$version."
+          }
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Build signed Windows ZIP
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: ./scripts/package-windows.ps1 -Sign
+
+      - name: Attach ZIP to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $asset = Get-Item "target/dist/snip-snip-$($env:RELEASE_TAG.Substring(1))-windows-x64.zip"
+          $draft = & gh release view $env:RELEASE_TAG --json isDraft --jq .isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+              if ($draft -ne 'true') {
+                  throw "Release $env:RELEASE_TAG is already published."
+              }
+          } else {
+              & gh release create $env:RELEASE_TAG --draft --verify-tag --title $env:RELEASE_TAG --generate-notes
+              if ($LASTEXITCODE -ne 0) { throw 'Creating draft release failed.' }
+          }
+          & gh release upload $env:RELEASE_TAG $asset.FullName --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Uploading Windows ZIP failed.' }

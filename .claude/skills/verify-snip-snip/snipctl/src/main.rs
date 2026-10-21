@@ -21,7 +21,7 @@ use screen::{Layout, OVERLAY_TITLE};
 const USAGE: &str = "\
 snipctl <command> [args]
 
-  launch                start target/release/snip-snip in a new run dir; waits for ready
+  launch [EXE]          start EXE (default target/release/snip-snip) from its folder; waits for ready
   verify-shell [CHORD]  Windows shell scenario, evidence + cleanup; default ctrl+alt+k
   doctor                read-only health check of the current run
   target                show the fixture (blue|green halves) at screen 100,100 size 800x500
@@ -87,7 +87,10 @@ fn dispatch(args: &[String]) -> Result<()> {
             #[cfg(not(windows))]
             bail!("verify-shell currently requires Windows tray automation")
         }
-        "launch" => launch(),
+        "launch" => {
+            anyhow::ensure!(rest.len() <= 1, "expected at most one executable path");
+            launch(rest.first().map(Path::new))
+        }
         "doctor" => doctor(),
         "target" => target(),
         "fixture-window" => fixture::run(),
@@ -230,19 +233,18 @@ fn app(run: &Run) -> Result<u32> {
         .context("our snip-snip is not running (see doctor)")
 }
 
-fn launch() -> Result<()> {
-    let exe = check_launch()?;
+fn launch(exe: Option<&Path>) -> Result<()> {
+    let exe = check_launch(exe.unwrap_or(&run::app_exe()))?;
     let run = run::start()?;
     launch_app(&run, &exe)
 }
 
 #[cfg(windows)]
 fn launch_in(run: &Run) -> Result<()> {
-    launch_app(run, &check_launch()?)
+    launch_app(run, &check_launch(&run::app_exe())?)
 }
 
-fn check_launch() -> Result<std::path::PathBuf> {
-    let exe = run::app_exe();
+fn check_launch(exe: &Path) -> Result<std::path::PathBuf> {
     if !exe.exists() {
         bail!(
             "missing {}; run: cargo build --release -p snip-gpui",
@@ -255,11 +257,17 @@ fn check_launch() -> Result<std::path::PathBuf> {
             "snip-snip already running (pid {others:?}); it owns the capture shortcut. Ask the user before stopping it."
         );
     }
-    Ok(exe)
+    exe.canonicalize().context("resolving app executable")
 }
 
 fn launch_app(run: &Run, exe: &Path) -> Result<()> {
-    let pid = run.spawn("app", Command::new(exe).env("SNIP_SNIP_VERIFY", "1"))?;
+    fs::write(run.path("app-exe"), exe.to_string_lossy().as_bytes())?;
+    let pid = run.spawn(
+        "app",
+        Command::new(exe)
+            .current_dir(exe.parent().context("app executable has no parent folder")?)
+            .env("SNIP_SNIP_VERIFY", "1"),
+    )?;
     wait_for("the ready line", Duration::from_secs(10), || {
         let log = run.app_log();
         if log.contains("snip-snip running") {
@@ -270,13 +278,17 @@ fn launch_app(run: &Run, exe: &Path) -> Result<()> {
         }
         Ok(None)
     })?;
-    run.step(&format!("launched pid {pid}; run dir {}", run.dir.display()))
+    run.step(&format!(
+        "launched {} pid {pid}; run dir {}",
+        exe.display(),
+        run.dir.display()
+    ))
 }
 
 fn doctor() -> Result<()> {
     let run = run::current()?;
     let pid = run.owned("app");
-    let exe = run::app_exe();
+    let exe = std::path::PathBuf::from(fs::read_to_string(run.path("app-exe"))?);
     let log = run.app_log();
     let others: Vec<u32> = run::snip_snip_pids()
         .into_iter()
@@ -300,7 +312,7 @@ fn doctor() -> Result<()> {
     let unlocked = platform::desktop_unlocked();
     let checks: [(&str, bool, String); 7] = [
         ("our app running", pid.is_some(), format!("{pid:?}")),
-        ("binary is this repo", ours, exe.display().to_string()),
+        ("binary is launched exe", ours, exe.display().to_string()),
         (
             "ready line logged",
             log.contains("snip-snip running"),
