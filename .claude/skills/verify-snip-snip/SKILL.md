@@ -53,19 +53,18 @@ snipctl drag 0 0 300 300
 snipctl key mod+z
 snipctl key mod+shift+z
 snipctl shot result
+snipctl save saved
 snipctl key mod+c
 snipctl clipboard copied
-snipctl save saved
 snipctl compare copied saved
 snipctl inspect saved
-snipctl close
 snipctl cleanup
 ```
 
 Completion: capture shows the blue/green fixture; the rectangle appears; crop
 keeps the blue region; undo restores the full image and redo restores the crop;
-the final PNG is 300×300 with the visible rectangle portion; Copy and Save have
-identical decoded pixels. `mod` means Ctrl on Windows and Cmd on macOS.
+the final PNG is 300×300 with the visible rectangle portion; `mod+c` closes the
+editor and Copy and Save have identical decoded pixels. `mod` means Ctrl on Windows and Cmd on macOS.
 
 ## Coordinates and checks
 

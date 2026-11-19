@@ -96,11 +96,10 @@ Open the toolbar's **Export** menu to choose **Copy**, **Copy & Close**, or **Sa
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl/Cmd+C` | Copy the image and keep editing. |
-| `Ctrl/Cmd+Shift+C` | Copy the image and close the editor. |
+| `Ctrl/Cmd+C` | Copy the image and close the editor. |
 | `Ctrl/Cmd+S` | Save the image as a PNG. |
 
-Copy puts the image on the clipboard as PNG and DIB so it can be pasted into most apps. **Copy & Close** closes the editor only after the copy succeeds, and the copied image remains on the clipboard afterward. If another app has reserved its shortcut, use the **Export** menu.
+Copy puts the image on the clipboard as PNG and DIB so it can be pasted into most apps. **Copy & Close** closes the editor only after the copy succeeds, and the copied image remains on the clipboard afterward. To copy and keep editing, choose **Copy** from the **Export** menu.
 
 Save opens your native file picker in a `snip-snip` folder under Pictures, creating the folder on your first save. If Pictures isn't available, it uses a `snip-snip` folder under your home directory. The suggested filename includes the local export time, such as `snip-2026-10-11_23-59-59-007.png`, with a numeric suffix if that name already exists. You can change the filename or destination in the picker.
 

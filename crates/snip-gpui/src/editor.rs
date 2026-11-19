@@ -323,7 +323,7 @@ impl Editor {
             (true, "y") if cfg!(windows) && keystroke.modifiers.control => {
                 return self.restore_history(true, window, cx);
             }
-            (true, "c") => return self.copy(keystroke.modifiers.shift, window, cx),
+            (true, "c") => return self.copy(true, window, cx),
             (true, "s") => return self.save(window, cx),
             _ => {}
         }
