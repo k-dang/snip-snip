@@ -14,18 +14,18 @@ resolution. Failures keep the document available for retry.
 
 ## How to get to it (user POV)
 
-`mod+c`, `mod+shift+c`, `mod+s`, or Copy / Copy & Close / Save toolbar controls.
+`mod+c` (Copy & Close), `mod+s`, or Copy / Copy & Close / Save toolbar controls.
 
 ## Driving it with snipctl
 
 Preconditions: healthy owned session, fixture snip with an annotation or crop.
 
-- **Copy/Save.** `key mod+c`, `clipboard export-copy`, `save export-save`, then
-  `compare export-copy export-save`. Inspect the saved dimensions/content and
-  capture the final editor state. One comparison per flow is enough.
-- **Copy & Close, when affected.** Activate it, use `doctor` to confirm the
-  editor closed while the app remains healthy, then read the clipboard and
-  `compare export-save export-copy-close`. Start another snip.
+- **Save, then Copy & Close.** Capture the final editor state, `save export-save`,
+  then `key mod+c` and `clipboard export-copy`, and `compare export-copy export-save`.
+  Use `doctor` to confirm the editor closed while the app remains healthy, and
+  inspect the saved dimensions/content. One comparison per flow is enough.
+- **Copy, when affected.** Click the Export menu's Copy with `click-screen`,
+  confirm the editor stays open, and read the clipboard.
 - **Cancel, when affected.** `cancel-save` dismisses the native picker and asserts
   the editor remains open. Confirm editing still works and no export was created.
 - **Defaults, when affected.** Inspect the picker's initial folder/name before
@@ -38,9 +38,9 @@ Preconditions: healthy owned session, fixture snip with an annotation or crop.
 - `save` refuses existing evidence names and waits for a decodable image.
 - Status text may truncate paths; inspect the file or clipboard itself.
 - `key esc` focuses the editor. Use `cancel-save` to dismiss its modal picker.
-- A globally reserved completion shortcut may not reach the editor. Use
-  `probe-shortcut ctrl+shift+c` on Windows to diagnose it, then check the visible
-  toolbar control. Report shortcut delivery separately when it is in scope.
+- A globally reserved shortcut may not reach the editor. Use `probe-shortcut`
+  on Windows to diagnose it, then check the visible toolbar control. Report
+  shortcut delivery separately when it is in scope.
 
 For clipboard format/lifetime changes, add a native application-paste check on
 Windows: `paint-launch EXE`, `paint-key ctrl+v`, `paint-shot paste-view`.

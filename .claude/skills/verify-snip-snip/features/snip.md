@@ -21,7 +21,7 @@ Preconditions: launched, healthy app; no editor open.
 
 - **Capture.** `target`, `snip 200 200 600 300`, then `shot snip-editor`.
   Confirm the blue/green fixture appears with the intended boundary.
-  Copy once (`key mod+c`, `clipboard snip-copy`) and inspect its dimensions/content.
+  Copy & Close once (`key mod+c`, `clipboard snip-copy`) and inspect its dimensions/content.
   The Windows baseline is 600×300. macOS selects source pixels from point coordinates,
   so dimensions depend on display scaling.
 - **Cancel.** `cancel-snip` opens capture and sends Escape; it fails if an editor opens.

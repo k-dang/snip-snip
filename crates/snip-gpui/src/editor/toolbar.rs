@@ -342,7 +342,7 @@ impl Editor {
                     ("100%", ViewPreset::ActualSize, "1"),
                 ]
                 .map(|(label, preset, key)| {
-                    menu_item(label, shortcut(key), cx, move |this, window, cx, _| {
+                    menu_item(label, Some(shortcut(key)), cx, move |this, window, cx, _| {
                         if this.model.is_cropping() {
                             this.cancel_gesture(window);
                         }
@@ -366,13 +366,13 @@ impl Editor {
             .flex_col()
             .gap_1()
             .child(heading("Finish your snip"))
-            .child(menu_item("Copy", shortcut("C"), cx, |this, window, cx, _| {
+            .child(menu_item("Copy", None, cx, |this, window, cx, _| {
                 window.focus(&this.focus, cx);
                 this.copy(false, window, cx);
             }))
             .child(menu_item(
                 "Copy & Close",
-                shortcut("Shift+C"),
+                Some(shortcut("C")),
                 cx,
                 |this, window, cx, _| {
                     window.focus(&this.focus, cx);
@@ -380,10 +380,15 @@ impl Editor {
                 },
             ))
             .child(div().my_1().h(px(1.)).bg(rgb(BORDER)))
-            .child(menu_item("Save…", shortcut("S"), cx, |this, window, cx, _| {
-                window.focus(&this.focus, cx);
-                this.save(window, cx);
-            }))
+            .child(menu_item(
+                "Save…",
+                Some(shortcut("S")),
+                cx,
+                |this, window, cx, _| {
+                    window.focus(&this.focus, cx);
+                    this.save(window, cx);
+                },
+            ))
     }
 }
 
@@ -432,18 +437,22 @@ pub(super) fn control(
 
 fn menu_item(
     label: &'static str,
-    key: String,
+    key: Option<String>,
     cx: &mut Context<Editor>,
     action: impl Fn(&mut Editor, &mut Window, &mut Context<Editor>, bool) + 'static,
 ) -> Stateful<Div> {
-    control(label, true, cx, action)
+    let item = control(label, true, cx, action)
         .hover(|s| s.bg(rgb(HOVER)))
         .w_full()
         .px_2()
         .justify_between()
-        .aria_keyshortcuts(key.clone())
-        .child(label)
-        .child(div().text_color(rgb(MUTED)).text_size(px(10.)).child(key))
+        .child(label);
+    match key {
+        Some(key) => item
+            .aria_keyshortcuts(key.clone())
+            .child(div().text_color(rgb(MUTED)).text_size(px(10.)).child(key)),
+        None => item,
+    }
 }
 
 fn heading(label: &'static str) -> impl IntoElement {

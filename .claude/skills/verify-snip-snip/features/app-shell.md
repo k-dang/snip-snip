@@ -31,7 +31,7 @@ snipctl verify-shell
 
 The command owns its run: windowless launch, opening Settings twice and
 checking its identity/focus, recording and applying a replacement, capture
-with that chord after Settings closes, fixture export, editor closure,
+with that chord after Settings closes, fixture Save, Ctrl+C Copy & Close,
 native Quit, restart and capture with the saved chord, menu capture and
 cancellation, and final Quit. It checks the fixture export is 600×300 and
 Copy matches Save's decoded pixels. Review the blue/green fixture visually.
@@ -84,7 +84,5 @@ claim native proof of those failures or of icon disappearance/legibility.
   change. Simulated GPUI keystrokes do not prove native key-code recording.
   The driver accepts macOS virtual-key codes in chords, for example
   `alt+shift+code:1` presses the physical U.S. S position regardless of layout.
-- `verify-shell` does not exercise Copy & Close. Follow [Export](export.md)
-  for that focused integration check; prove the shell survives completion and
-  another capture succeeds. A toolbar check does not prove delivery of the
-  globally reserved completion shortcut.
+- `verify-shell` exercises Ctrl+C Copy & Close and proves the shell survives it.
+  Follow [Export](export.md) for focused clipboard checks.

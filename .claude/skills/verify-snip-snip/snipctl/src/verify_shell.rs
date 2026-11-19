@@ -166,9 +166,10 @@ fn scenario(session: &Session, chord: &str, candidate: HotKey) -> Result<()> {
         "PASS  Fixture export: {}",
         screen::inspect(&run.path("fixture.png"))?
     ))?;
-    crate::close()?;
-    assert_no_windows(run)?;
-    run.step("PASS  Editor closure leaves the shell running")?;
+    wait_for("Ctrl+C to close the editor", Duration::from_secs(5), || {
+        Ok(screen::windows_of(pid)?.is_empty().then_some(()))
+    })?;
+    run.step("PASS  Copy & Close leaves the shell running")?;
     crate::shell_menu("quit")?;
     fs::copy(run.path("app.log"), run.path("app-first-launch.log"))?;
     crate::launch_in(run)?;

@@ -16,9 +16,9 @@ choose those affected by the change.
 
 ## Native platform coverage recorded on 2026-10-12
 
-Windows MVP feature coverage was recorded; native pinch and delivery of the
-Copy & Close shortcut remain unproven (`Ctrl+Shift+C` was globally reserved).
-Its toolbar completion flow was verified.
+Windows MVP feature coverage was recorded; native pinch remains unproven.
+Copy & Close was then on `Ctrl+Shift+C`, which was globally reserved; it has
+since moved to `Ctrl+C`, and only its toolbar flow was verified.
 
 macOS passed physical shortcut delivery, Settings recording/application,
 restart persistence, Canadian/Dvorak input-source switching, capture, and

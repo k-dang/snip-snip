@@ -133,9 +133,6 @@ fn save_defers_folder_access_and_keeps_input_available_before_the_picker(cx: &mu
         "Save must return before accessing the folder"
     );
     assert!(!cx.cx.did_prompt_for_new_path());
-    cx.cx
-        .dispatch_keystroke(window, gpui::Keystroke::parse(&format!("{modifier}-c")).unwrap());
-    assert_image(effects.clipboard.borrow().clone().unwrap(), &expected(vec![]));
     other.update(|window, _| window.activate_window());
     assert_ne!(cx.cx.read(|app| app.active_window()), Some(window));
     cx.run_until_parked();
@@ -151,11 +148,10 @@ fn save_defers_folder_access_and_keeps_input_available_before_the_picker(cx: &mu
 
     cx.cx
         .dispatch_keystroke(window, gpui::Keystroke::parse(&format!("{modifier}-s")).unwrap());
-    cx.cx.dispatch_keystroke(
-        window,
-        gpui::Keystroke::parse(&format!("{modifier}-shift-c")).unwrap(),
-    );
+    cx.cx
+        .dispatch_keystroke(window, gpui::Keystroke::parse(&format!("{modifier}-c")).unwrap());
     cx.run_until_parked();
+    assert_image(effects.clipboard.borrow().clone().unwrap(), &expected(vec![]));
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(
         !cx.cx.did_prompt_for_new_path(),
@@ -331,7 +327,7 @@ fn copy_and_close_keeps_the_editor_on_failure_and_closes_only_after_success(cx: 
     let mut cx = editor(cx);
     let expected = annotated_crop(&mut cx);
     effects.clipboard_error.set(true);
-    command(&mut cx, "shift-c");
+    command(&mut cx, "c");
     cx.run_until_parked();
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(cx.debug_bounds("Copy failed: clipboard unavailable").is_some());
@@ -341,20 +337,20 @@ fn copy_and_close_keeps_the_editor_on_failure_and_closes_only_after_success(cx: 
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(cx.debug_bounds("Copy failed: clipboard unavailable").is_some());
     effects.clipboard_error.set(false);
-    command(&mut cx, "c");
+    toolbar(&mut cx, "Copy");
     cx.run_until_parked();
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(cx.debug_bounds("Copied to clipboard").is_some());
     assert_image(effects.clipboard.borrow().clone().unwrap(), &expected);
     effects.clipboard.replace(None);
-    command(&mut cx, "shift-c");
+    toolbar(&mut cx, "Copy & Close");
     cx.run_until_parked();
     assert_eq!(cx.cx.read(|app| app.windows().len()), 0);
     assert_image(effects.clipboard.borrow().clone().unwrap(), &expected);
 }
 
 #[gpui::test]
-fn toolbar_copy_and_close_cancels_an_unfinished_drag_and_leaves_other_editors_open(app: &mut TestAppContext) {
+fn copy_shortcut_cancels_an_unfinished_drag_and_leaves_other_editors_open(app: &mut TestAppContext) {
     let effects = TestExports::configure(app);
     let mut first = editor(app);
     let expected_first = annotated_crop(&mut first);
@@ -371,10 +367,6 @@ fn toolbar_copy_and_close_cancels_an_unfinished_drag_and_leaves_other_editors_op
     second.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     second.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     command(&mut second, "c");
-    second.run_until_parked();
-    assert_image(effects.clipboard.borrow().clone().unwrap(), &expected(vec![]));
-    assert_eq!(app.read(|app| app.windows().len()), 2);
-    toolbar(&mut second, "Copy & Close");
     second.run_until_parked();
     assert_eq!(app.read(|app| app.windows().len()), 1);
     assert_image(effects.clipboard.borrow().clone().unwrap(), &expected(vec![]));
