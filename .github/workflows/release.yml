@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Packaging changes build both ZIPs before they reach a release tag.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/**
 
 permissions:
   contents: read
@@ -12,37 +17,26 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   windows:
     name: Windows x64 ZIP
     runs-on: windows-2025
     timeout-minutes: 45
-    permissions:
-      contents: write
     defaults:
       run:
         shell: pwsh
-    env:
-      CARGO_TERM_COLOR: always
-      RELEASE_TAG: ${{ github.ref_name }}
 
     steps:
-      - name: Check out release tag
+      - name: Check out
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
-
-      - name: Check tag matches app version
-        run: |
-          $metadata = (& cargo metadata --locked --no-deps --format-version 1) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Reading Cargo metadata failed.' }
-          $version = ($metadata.packages | Where-Object name -eq 'snip-gpui').version
-          if ($env:RELEASE_TAG -cne "v$version") {
-              throw "Tag $env:RELEASE_TAG must match app version v$version."
-          }
 
       - name: Run tests
         run: cargo test --workspace --locked
@@ -53,20 +47,77 @@ jobs:
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
         run: ./scripts/package-windows.ps1 -Sign
 
-      - name: Attach ZIP to draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+      - name: Keep ZIP for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: target/dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal ZIP
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Build macOS ZIP
+        run: ./scripts/package-macos.sh
+
+      - name: Keep ZIP for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: target/dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Attach ZIPs to draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Download ZIPs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach ZIPs to draft release
         run: |
-          $asset = Get-Item "target/dist/snip-snip-$($env:RELEASE_TAG.Substring(1))-windows-x64.zip"
-          $draft = & gh release view $env:RELEASE_TAG --json isDraft --jq .isDraft 2>$null
-          if ($LASTEXITCODE -eq 0) {
-              if ($draft -ne 'true') {
-                  throw "Release $env:RELEASE_TAG is already published."
-              }
-          } else {
-              & gh release create $env:RELEASE_TAG --draft --verify-tag --title $env:RELEASE_TAG --generate-notes
-              if ($LASTEXITCODE -ne 0) { throw 'Creating draft release failed.' }
-          }
-          & gh release upload $env:RELEASE_TAG $asset.FullName --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'Uploading Windows ZIP failed.' }
+          version=${RELEASE_TAG#v}
+          assets=("dist/snip-snip-$version-windows-x64.zip" "dist/snip-snip-$version-macos-universal.zip")
+          for asset in "${assets[@]}"; do
+              if [[ ! -f $asset ]]; then
+                  echo "::error::Missing $asset; tag $RELEASE_TAG must match the app version." >&2
+                  ls dist >&2
+                  exit 1
+              fi
+          done
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+              if [[ $draft != true ]]; then
+                  echo "::error::Release $RELEASE_TAG is already published." >&2
+                  exit 1
+              fi
+          else
+              gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber

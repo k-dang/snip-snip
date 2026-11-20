@@ -4,7 +4,11 @@ A screenshot and annotation tool for Windows and macOS, written in Rust and insp
 
 ![The snip-snip editor with a rectangle, arrow, pencil mark, and text label on a screenshot](docs/images/editor.png)
 
-## Run it
+## Download
+
+Grab the Windows or macOS ZIP from [Releases](https://github.com/k-dang/snip-snip/releases/latest). The macOS app isn't notarized yet, so after unzipping, run `xattr -dr com.apple.quarantine snip-snip.app` before opening it.
+
+## Run from source
 
 Install [rustup](https://rustup.rs/), then:
 
