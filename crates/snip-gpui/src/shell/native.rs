@@ -184,25 +184,6 @@ impl Drop for NativeShell {
 }
 
 fn icon() -> Result<Icon> {
-    // Four open corners on a transparent background. AppKit uses the alpha as
-    // a template; Windows gets white strokes over a one-pixel dark outline.
-    let mut pixels = vec![0_u8; 32 * 32 * 4];
-    let layers: &[(usize, u8)] = if cfg!(target_os = "macos") {
-        &[(0, 30)]
-    } else {
-        &[(1, 30), (0, 245)]
-    };
-    for &(padding, ink) in layers {
-        let side = |n| (4 - padding..8 + padding).contains(&n) || (24 - padding..28 + padding).contains(&n);
-        let arm = |n| (4 - padding..14 + padding).contains(&n) || (18 - padding..28 + padding).contains(&n);
-        for y in 0..32_usize {
-            for x in 0..32_usize {
-                if side(x) && arm(y) || side(y) && arm(x) {
-                    let offset = (y * 32 + x) * 4;
-                    pixels[offset..offset + 4].copy_from_slice(&[ink, ink, ink, 255]);
-                }
-            }
-        }
-    }
-    Ok(Icon::from_rgba(pixels, 32, 32)?)
+    let pixels = crate::icon::pixels(cfg!(target_os = "macos"));
+    Ok(Icon::from_rgba(pixels, crate::icon::SIZE, crate::icon::SIZE)?)
 }

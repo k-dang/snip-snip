@@ -5,6 +5,7 @@
 mod capture;
 mod drag;
 mod editor;
+mod icon;
 mod overlay;
 mod shell;
 
