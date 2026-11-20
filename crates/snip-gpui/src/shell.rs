@@ -12,6 +12,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use global_hotkey::hotkey::HotKey;
 use gpui::{App, BorrowAppContext, Global, WindowHandle};
 
+mod icon;
 mod native;
 mod settings;
 mod shortcut;
