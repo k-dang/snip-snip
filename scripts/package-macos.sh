@@ -17,8 +17,9 @@ for target in "${targets[@]}"; do
     binaries+=("target/$target/release/snip-snip")
 done
 
+# The ID ends in "#0.1.2" or "#snip-gpui@0.1.2", depending on the directory name.
 pkgid=$(cargo pkgid -p snip-gpui)
-version=${pkgid##*@}
+version=${pkgid##*[#@]}
 stage=target/dist/macos
 app=$stage/snip-snip.app
 rm -rf "$stage"
