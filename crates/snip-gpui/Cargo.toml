@@ -37,6 +37,7 @@ windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32
 
 [build-dependencies]
 embed-resource = "3"
+image = { workspace = true, features = ["ico"] }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

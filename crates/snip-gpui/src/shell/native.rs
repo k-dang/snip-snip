@@ -184,10 +184,6 @@ impl Drop for NativeShell {
 }
 
 fn icon() -> Result<Icon> {
-    let size = super::icon::SIZE as u32;
-    Ok(Icon::from_rgba(
-        super::icon::pixels(cfg!(target_os = "macos")),
-        size,
-        size,
-    )?)
+    let pixels = crate::icon::pixels(cfg!(target_os = "macos"));
+    Ok(Icon::from_rgba(pixels, crate::icon::SIZE, crate::icon::SIZE)?)
 }
