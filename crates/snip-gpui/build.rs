@@ -17,12 +17,12 @@ fn main() {
     image::RgbaImage::from_raw(icon::SIZE, icon::SIZE, icon::pixels(false))
         .unwrap()
         .save(&ico)
-        .unwrap();
+        .expect("encoding snip-snip.ico");
     let rc = out.join("snip-snip.rc");
     // The resource compiler reads backslashes in string literals as escapes.
     let ico = ico.display().to_string().replace('\\', "/");
-    fs::write(&rc, format!("1 ICON \"{ico}\"\n")).unwrap();
+    fs::write(&rc, format!("1 ICON \"{ico}\"\n")).expect("writing snip-snip.rc");
     embed_resource::compile(&rc, embed_resource::NONE)
         .manifest_optional()
-        .unwrap();
+        .expect("embedding the snip-snip icon resource");
 }
