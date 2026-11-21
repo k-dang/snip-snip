@@ -28,8 +28,13 @@ enabled.
 ## Consequences
 
 - The only stored credential is the OAuth refresh token, kept in the OS
-  credential store. Refreshes may rotate it, so the app saves each one it
-  receives.
+  credential store. The client must have the `refresh_token` grant, and the app
+  must request `offline_access` explicitly. Every refresh rotates the refresh
+  token and revokes the previous access token (which lasts an hour), so the app
+  saves each new refresh token and shares one current access token.
+- The app requests `workers-r2.write`, which reaches every bucket in the
+  chosen account. The narrower `workers-r2-bucket-item.write` scope is refused
+  by the REST API's R2 endpoints, both for buckets and for objects.
 - The OAuth client is registered in the maintainer's Cloudflare account and
   stays private for now, so only members of that account can sign in. Opening
   it to every Cloudflare user is a one-way step that needs a verified domain.
