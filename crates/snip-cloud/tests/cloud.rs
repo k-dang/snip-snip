@@ -264,13 +264,8 @@ fn sign_in_exchanges_the_code_with_pkce() {
     })
     .unwrap();
 
-    let saved = Arc::new(Mutex::new(Vec::new()));
-    let session = {
-        let saved = saved.clone();
-        Session::new(config, tokens, move |token| {
-            saved.lock().unwrap().push(token.to_owned())
-        })
-    };
+    assert_eq!(tokens.refresh_token(), "refresh-1");
+    let session = Session::new(config, tokens, |_| {});
     assert_eq!(
         session.accounts().unwrap(),
         [Account {
@@ -278,7 +273,6 @@ fn sign_in_exchanges_the_code_with_pkce() {
             name: "Kevin's Account".into()
         }]
     );
-    assert_eq!(*saved.lock().unwrap(), ["refresh-1"]);
 }
 
 #[test]

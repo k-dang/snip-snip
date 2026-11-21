@@ -79,7 +79,6 @@ impl Reply {
         ))
     }
 
-    /// The body of a successful reply.
     pub fn body(self, doing: &str) -> Result<Vec<u8>> {
         if !self.succeeded() {
             return Err(self.error(doing));

@@ -77,6 +77,18 @@ pub struct Cloud {
     credentials: Arc<dyn Credentials>,
     state: State,
     error: Option<String>,
+    /// Cleared when the current session is signed out or replaced, so its
+    /// in-flight refreshes stop saving tokens over the next session's.
+    live: Arc<AtomicBool>,
+}
+
+impl Cloud {
+    /// Retires the current session's token saving and starts a new one.
+    fn next_session(&mut self) -> Arc<AtomicBool> {
+        self.live.store(false, Ordering::Relaxed);
+        self.live = Arc::new(AtomicBool::new(true));
+        self.live.clone()
+    }
 }
 
 impl Global for Cloud {}
@@ -98,6 +110,7 @@ pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
         credentials: credentials.clone(),
         state: State::SignedOut,
         error: None,
+        live: Arc::new(AtomicBool::new(false)),
     });
     let load = cx.background_executor().spawn({
         let credentials = credentials.clone();
@@ -113,10 +126,11 @@ pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
             }
             match loaded {
                 Ok(Some((refresh_token, account))) => {
+                    let live = cloud.next_session();
                     let session = Arc::new(Session::restore(
                         Config::cloudflare(),
                         refresh_token,
-                        saver(credentials),
+                        saver(credentials, live),
                     ));
                     cloud.state = ready(Bucket::existing(session, &account.id), account);
                 }
@@ -138,11 +152,14 @@ fn ready(bucket: Bucket, account: Account) -> State {
     }))
 }
 
-/// Saves each refresh token a session receives. A failed save only costs a
-/// sign-in on the next launch, so it is logged rather than surfaced.
-fn saver(credentials: Arc<dyn Credentials>) -> impl Fn(&str) + Send + Sync + 'static {
+/// Saves each rotated refresh token while the session is `live`. A failed
+/// save only costs a sign-in on the next launch, so it is logged rather than
+/// surfaced.
+fn saver(credentials: Arc<dyn Credentials>, live: Arc<AtomicBool>) -> impl Fn(&str) + Send + Sync + 'static {
     move |token| {
-        if let Err(error) = credentials.save_session(token) {
+        if live.load(Ordering::Relaxed)
+            && let Err(error) = credentials.save_session(token)
+        {
             eprintln!("cloud: could not save the session: {error:#}");
         }
     }
@@ -172,13 +189,20 @@ pub fn sign_in(cx: &mut App) {
     let cancel = Arc::new(AtomicBool::new(false));
     cloud.state = State::SigningIn(cancel.clone());
     cloud.error = None;
+    let live = cloud.next_session();
     let credentials = cloud.credentials.clone();
     let signed_in = cx.background_executor().spawn({
         let cancel = cancel.clone();
         async move {
             let config = Config::cloudflare();
             let tokens = snip_cloud::sign_in(&config, &cancel, |url| open::that(url))?;
-            let session = Arc::new(Session::new(config, tokens, saver(credentials)));
+            if !live.load(Ordering::Relaxed) {
+                return Err(snip_cloud::Error::Canceled);
+            }
+            credentials
+                .save_session(tokens.refresh_token())
+                .context("saving the Cloudflare session")?;
+            let session = Arc::new(Session::new(config, tokens, saver(credentials, live)));
             let accounts = session.accounts()?;
             Ok::<_, snip_cloud::Error>((session, accounts))
         }
@@ -211,9 +235,13 @@ pub fn sign_in(cx: &mut App) {
     .detach();
 }
 
+/// Abandons sign-in at once; a browser reply that still arrives is ignored.
 pub fn cancel_sign_in(cx: &mut App) {
-    if let State::SigningIn(cancel) = &cx.global::<Cloud>().state {
+    let cloud = cx.global_mut::<Cloud>();
+    if let State::SigningIn(cancel) = &cloud.state {
         cancel.store(true, Ordering::Relaxed);
+        cloud.state = State::SignedOut;
+        cloud.next_session();
     }
 }
 
@@ -276,6 +304,7 @@ pub fn sign_out(cx: &mut App) {
     cancel_sign_in(cx);
     let cloud = cx.global_mut::<Cloud>();
     cloud.state = State::SignedOut;
+    cloud.next_session();
     cloud.error = cloud
         .credentials
         .clear()
@@ -412,6 +441,7 @@ pub mod testing {
                 thumbnails: RefCell::default(),
             })),
             error: None,
+            live: Arc::new(AtomicBool::new(true)),
         }
     }
 

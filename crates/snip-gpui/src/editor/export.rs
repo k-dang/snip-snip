@@ -91,6 +91,11 @@ pub(super) fn window_save_picker(
     })
 }
 
+/// What the user has changed in a document, cheap to compare.
+fn edits(document: &snip_core::Document) -> (Vec<snip_core::Annotation>, Option<snip_core::Rect>) {
+    (document.annotations.clone(), document.crop)
+}
+
 fn save_defaults(directory: PathBuf, time: DateTime<FixedOffset>) -> Result<(PathBuf, String)> {
     fs::create_dir_all(&directory).with_context(|| format!("preparing {}", directory.display()))?;
     // Surface enumeration errors before opening the picker.
@@ -138,6 +143,7 @@ impl Editor {
             self.status = format!("Copy failed: {error:#}").into();
             return cx.notify();
         }
+        let uploaded = edits(self.model.document());
         let Some(upload) = crate::cloud::run(cx, move |store| store.upload(&image)) else {
             return;
         };
@@ -145,9 +151,21 @@ impl Editor {
         self.status = "Uploading to the cloud…".into();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let uploaded = upload.await;
-            this.update_in(cx, |this, window, cx| match uploaded {
-                Ok(_) => window.remove_window(),
+            let upload = upload.await;
+            this.update_in(cx, |this, window, cx| match upload {
+                // Editing continues during the upload; keep anything added since.
+                Ok(_)
+                    if edits(this.model.document()) == uploaded
+                        && !this.has_gesture()
+                        && !this.model.is_editing_text() =>
+                {
+                    window.remove_window()
+                }
+                Ok(_) => {
+                    this.uploading = false;
+                    this.status = "Uploaded to the cloud, without your later edits".into();
+                    cx.notify();
+                }
                 Err(message) => {
                     this.uploading = false;
                     this.status = format!("Copy to cloud failed: {message}").into();

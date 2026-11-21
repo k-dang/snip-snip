@@ -2,6 +2,7 @@
 //! copies it; Delete removes it from the bucket after a confirming click.
 
 use std::{
+    rc::{Rc, Weak},
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -15,7 +16,7 @@ use snip_cloud::CloudSnip;
 use snip_core::RgbaImage;
 
 use crate::{
-    cloud::{self, CloudStore},
+    cloud::{self, CloudStore, Connection},
     ui::{self, button, line},
 };
 
@@ -46,6 +47,8 @@ pub struct Library {
     released: Vec<Arc<RenderImage>>,
     /// Listing and thumbnails; replacing it cancels the previous load.
     loading: Task<()>,
+    /// The connection the tiles came from.
+    source: Option<Weak<Connection>>,
 }
 
 struct Tile {
@@ -128,13 +131,18 @@ fn show(status: Option<Status>, cx: &mut App) {
                 false
             });
             cx.new(|cx| {
-                cx.observe_global::<cloud::Cloud>(|_, cx| cx.notify()).detach();
+                cx.observe_global::<cloud::Cloud>(|library: &mut Library, cx| {
+                    library.follow_connection(cx);
+                    cx.notify();
+                })
+                .detach();
                 let mut library = Library {
                     tiles: None,
                     status,
                     confirming: None,
                     released: Vec::new(),
                     loading: Task::ready(()),
+                    source: None,
                 };
                 library.reload(cx);
                 library
@@ -148,7 +156,33 @@ fn show(status: Option<Status>, cx: &mut App) {
 }
 
 impl Library {
+    /// Drops another account's snips after a sign-out or account change, and
+    /// lists the new account's.
+    fn follow_connection(&mut self, cx: &mut Context<Self>) {
+        let current = cloud::connection(cx);
+        let same = match (&self.source, &current) {
+            (Some(source), Some(current)) => source.as_ptr() == Rc::as_ptr(current),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.loading = Task::ready(());
+        self.released.extend(
+            self.tiles
+                .take()
+                .into_iter()
+                .flatten()
+                .filter_map(|tile| tile.thumbnail),
+        );
+        self.confirming = None;
+        self.status = None;
+        self.reload(cx);
+    }
+
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.source = cloud::connection(cx).map(|connection| Rc::downgrade(&connection));
         let Some(listing) = cloud::run(cx, |store| store.latest(LIMIT)) else {
             return;
         };

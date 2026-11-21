@@ -28,11 +28,17 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Refresh this long before expiry so a token can't lapse mid-request.
 const EXPIRY_MARGIN: Duration = Duration::from_secs(60);
 
-/// The tokens from a completed sign-in.
 pub struct Tokens {
     access: String,
     refresh: String,
     expires_in: Duration,
+}
+
+impl Tokens {
+    /// The refresh token to save before starting a [`Session`].
+    pub fn refresh_token(&self) -> &str {
+        &self.refresh
+    }
 }
 
 /// Opens the browser at Cloudflare's consent page and waits for its redirect
@@ -87,6 +93,8 @@ pub fn sign_in(
             Err(error) => return Err(error.into()),
         }
     };
+    // Free the port for another attempt while the code is exchanged.
+    drop(listener);
 
     let reply = Reply::read(crate::http::agent().post(&config.token_url).send_form([
         ("grant_type", "authorization_code"),
@@ -204,10 +212,9 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts a session from a fresh sign-in. `on_refresh` receives the
-    /// refresh token now and after every rotation, to save it.
+    /// Starts a session from a fresh sign-in. `on_refresh` receives each
+    /// rotated refresh token, to save it.
     pub fn new(config: Config, tokens: Tokens, on_refresh: impl Fn(&str) + Send + Sync + 'static) -> Self {
-        on_refresh(&tokens.refresh);
         let access = Some((tokens.access, Instant::now() + tokens.expires_in));
         Self::with(config, access, tokens.refresh, Box::new(on_refresh))
     }

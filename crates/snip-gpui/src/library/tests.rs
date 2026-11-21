@@ -89,6 +89,23 @@ fn deleting_takes_a_confirming_click(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn signing_in_to_another_account_replaces_the_library(cx: &mut TestAppContext) {
+    let (_, clipboard) = setup(cx, &[solid(40), solid(80)]);
+    let mut library = open_library(cx);
+    assert!(library.debug_bounds("snip-1").is_some());
+    let other = Arc::new(MemoryStore::default());
+    let other_snip = solid(160);
+    other.upload(&other_snip).unwrap();
+    cx.update(|cx| cx.set_global(signed_in(other)));
+    cx.run_until_parked();
+    let window = cx.update(|cx| cx.windows()[0]);
+    let mut library = VisualTestContext::from_window(window, cx);
+    assert!(library.debug_bounds("snip-1").is_none());
+    click(&mut library, "snip-0");
+    assert_eq!(clipboard.0.borrow().as_ref(), Some(&other_snip));
+}
+
+#[gpui::test]
 fn the_tray_copies_the_newest_snip_or_explains(cx: &mut TestAppContext) {
     let (store, clipboard) = setup(cx, &[]);
     cx.update(super::copy_latest);

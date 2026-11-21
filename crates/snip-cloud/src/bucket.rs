@@ -19,7 +19,6 @@ pub const THUMBNAIL_SIZE: u32 = 480;
 const SNIPS: &str = "snips/";
 const THUMBS: &str = "thumbs/";
 
-/// A snip stored in the bucket.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CloudSnip {
     /// Inverted upload milliseconds then a random suffix, both fixed-width hex.
@@ -103,16 +102,14 @@ impl Bucket {
     /// listed snip has one.
     pub fn upload(&self, image: &RgbaImage) -> Result<CloudSnip> {
         let snip = CloudSnip::new(SystemTime::now());
-        for (key, image) in [
-            (snip.thumbnail_key(), &thumbnail(image)),
-            (snip.image_key(), image),
-        ] {
+        // Encode both first: WebP rejects sides over 16,383 px.
+        let objects = [
+            (snip.thumbnail_key(), encode(&thumbnail(image))?),
+            (snip.image_key(), encode(image)?),
+        ];
+        for (key, bytes) in objects {
             self.session
-                .send(
-                    "PUT",
-                    &self.object_url(&key),
-                    Some(("image/webp", &encode(image)?)),
-                )?
+                .send("PUT", &self.object_url(&key), Some(("image/webp", &bytes)))?
                 .result("uploading a cloud snip")?;
         }
         Ok(snip)
@@ -193,7 +190,6 @@ pub fn encode(image: &RgbaImage) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Decodes a stored snip or thumbnail.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage> {
     image::load_from_memory_with_format(bytes, ImageFormat::WebP)
         .map(|image| image.into_rgba8())
