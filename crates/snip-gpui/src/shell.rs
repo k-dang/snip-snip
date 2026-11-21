@@ -13,7 +13,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use global_hotkey::hotkey::HotKey;
 use gpui::{App, BorrowAppContext, Global, WindowHandle};
 
-use crate::cloud::{self, Credentials};
+use crate::cloud::{self, Keychain};
 
 mod native;
 mod settings;
@@ -38,8 +38,6 @@ pub trait ShellPlatform {
     fn unregister(&mut self, shortcut: HotKey) -> Result<()>;
     fn capture(&mut self, cx: &mut App);
     fn dismiss_menu(&mut self) -> Result<()>;
-    /// Where the cloud session is saved.
-    fn credentials(&self) -> Arc<dyn Credentials>;
     /// Shows the tray's cloud items only while signed in.
     fn show_cloud_menu(&mut self, visible: bool) -> Result<()>;
 }
@@ -105,7 +103,6 @@ pub fn install(
         }
     };
     let show_error = error.is_some();
-    cloud::install(platform.credentials(), cx);
     cx.set_global(Shell {
         platform,
         path,
@@ -220,6 +217,7 @@ fn dismiss_menu(cx: &mut App) -> bool {
 pub fn start(cx: &mut App) -> Result<()> {
     let (tx, rx) = futures::channel::mpsc::unbounded();
     let platform = native::NativeShell::new(tx)?;
+    cloud::install(Arc::new(Keychain), cx);
     let path = dirs::config_dir()
         .context("locating the user settings folder")?
         .join("snip-snip")

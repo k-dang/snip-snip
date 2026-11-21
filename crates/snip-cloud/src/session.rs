@@ -18,7 +18,7 @@ use anyhow::{Context as _, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use ureq::{Agent, Body, http::Response};
+use ureq::Agent;
 
 use crate::{Config, Error, Result, http::Reply};
 
@@ -77,8 +77,8 @@ pub fn sign_in(
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(outcome) = callback(stream, &state)? {
-                    break outcome?;
+                if let Some(code) = callback(stream, &state)? {
+                    break code;
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -96,18 +96,14 @@ pub fn sign_in(
         ("code_verifier", verifier.as_str()),
     ]))?;
     if !reply.succeeded() {
-        return Err(Error::Other(anyhow!(
-            "Cloudflare refused the sign-in ({}): {}",
-            reply.status,
-            String::from_utf8_lossy(&reply.body)
-        )));
+        return Err(reply.error("exchanging the sign-in code"));
     }
     tokens(&reply)
 }
 
 /// Answers one browser request. `None` means keep waiting: another path, or a
 /// stale tab whose state doesn't match this sign-in.
-fn callback(mut stream: TcpStream, state: &str) -> Result<Option<Result<String>>> {
+fn callback(mut stream: TcpStream, state: &str) -> Result<Option<String>> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut reader = BufReader::new(&stream);
@@ -146,23 +142,23 @@ fn callback(mut stream: TcpStream, state: &str) -> Result<Option<Result<String>>
             "Sign-in didn't finish. You can close this tab and return to snip-snip.",
         )?;
         if error == "access_denied" {
-            return Ok(Some(Err(Error::Canceled)));
+            return Err(Error::Canceled);
         }
         let description = query("error_description").unwrap_or_default();
-        return Ok(Some(Err(Error::Other(anyhow!(
+        return Err(Error::Other(anyhow!(
             "Cloudflare sign-in failed: {error} {description}"
-        )))));
+        )));
     }
     let Some(code) = query("code") else {
         respond(&mut stream, "400 Bad Request", "The sign-in reply had no code.")?;
-        return Ok(Some(Err(Error::Other(anyhow!("the sign-in reply had no code")))));
+        return Err(Error::Other(anyhow!("the sign-in reply had no code")));
     };
     respond(
         &mut stream,
         "200 OK",
         "Signed in to snip-snip. You can close this tab.",
     )?;
-    Ok(Some(Ok(code)))
+    Ok(Some(code))
 }
 
 fn respond(stream: &mut TcpStream, status: &str, message: &str) -> std::io::Result<()> {
@@ -215,15 +211,8 @@ impl Session {
     /// refresh token now and after every rotation, to save it.
     pub fn new(config: Config, tokens: Tokens, on_refresh: impl Fn(&str) + Send + Sync + 'static) -> Self {
         on_refresh(&tokens.refresh);
-        Self {
-            config,
-            agent: crate::http::agent(),
-            current: Mutex::new(Current {
-                access: Some((tokens.access, Instant::now() + tokens.expires_in)),
-                refresh: tokens.refresh,
-            }),
-            on_refresh: Box::new(on_refresh),
-        }
+        let access = Some((tokens.access, Instant::now() + tokens.expires_in));
+        Self::with(config, access, tokens.refresh, Box::new(on_refresh))
     }
 
     /// Resumes a saved session; the first call refreshes its access token.
@@ -232,21 +221,27 @@ impl Session {
         refresh_token: String,
         on_refresh: impl Fn(&str) + Send + Sync + 'static,
     ) -> Self {
+        Self::with(config, None, refresh_token, Box::new(on_refresh))
+    }
+
+    fn with(
+        config: Config,
+        access: Option<(String, Instant)>,
+        refresh: String,
+        on_refresh: Box<dyn Fn(&str) + Send + Sync>,
+    ) -> Self {
         Self {
             config,
             agent: crate::http::agent(),
-            current: Mutex::new(Current {
-                access: None,
-                refresh: refresh_token,
-            }),
-            on_refresh: Box::new(on_refresh),
+            current: Mutex::new(Current { access, refresh }),
+            on_refresh,
         }
     }
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let url = format!("{}/accounts?per_page=50", self.config.api_url);
         let result = self
-            .call(|agent, auth| agent.get(&url).header("Authorization", auth).call())?
+            .send("GET", &url, None)?
             .result("listing Cloudflare accounts")?;
         Ok(result
             .as_array()
@@ -265,20 +260,30 @@ impl Session {
         &self.config.api_url
     }
 
-    /// Sends an authorized request. A rejected token is refreshed and the
-    /// request retried once, which also covers a token another thread's
-    /// refresh revoked while this request was in flight.
-    pub(crate) fn call(
-        &self,
-        send: impl Fn(&Agent, &str) -> std::result::Result<Response<Body>, ureq::Error>,
-    ) -> Result<Reply> {
+    /// Sends an authorized request with an optional `(content type, bytes)`
+    /// body. A rejected token is refreshed and the request retried once,
+    /// which also covers a token another thread's refresh revoked while this
+    /// request was in flight.
+    pub(crate) fn send(&self, method: &str, url: &str, body: Option<(&str, &[u8])>) -> Result<Reply> {
+        let attempt = |token: &str| {
+            let mut request = ureq::http::Request::builder()
+                .method(method)
+                .uri(url)
+                .header("Authorization", format!("Bearer {token}"));
+            if let Some((content_type, _)) = body {
+                request = request.header("Content-Type", content_type);
+            }
+            let request = request
+                .body(body.map_or(&[][..], |(_, bytes)| bytes))
+                .map_err(ureq::Error::from)?;
+            Reply::read(self.agent.run(request))
+        };
         let token = self.access(None)?;
-        let reply = Reply::read(send(&self.agent, &format!("Bearer {token}")))?;
+        let reply = attempt(&token)?;
         if !reply.is_auth_failure() {
             return Ok(reply);
         }
-        let token = self.access(Some(&token))?;
-        Reply::read(send(&self.agent, &format!("Bearer {token}")))
+        attempt(&self.access(Some(&token))?)
     }
 
     /// The current access token, refreshed when near expiry or when it is

@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::{Error, Result, Session};
 
-pub const BUCKET: &str = "snip-snip";
+const BUCKET: &str = "snip-snip";
 /// The longest side of a thumbnail, in pixels.
 pub const THUMBNAIL_SIZE: u32 = 480;
 const SNIPS: &str = "snips/";
@@ -78,34 +78,43 @@ impl Bucket {
 
     /// Opens the account's `snip-snip` bucket, creating it on first use.
     pub fn open(session: Arc<Session>, account_id: &str) -> Result<Self> {
-        let buckets = format!("{}/accounts/{account_id}/r2/buckets", session.api_url());
-        let url = format!("{buckets}/{BUCKET}");
-        let found = session.call(|agent, auth| agent.get(&url).header("Authorization", auth).call())?;
-        if found.status == 404 {
-            let created = session.call(|agent, auth| {
-                agent
-                    .post(&buckets)
-                    .header("Authorization", auth)
-                    .send_json(json!({ "name": BUCKET }))
-            })?;
-            // Another machine may have created it first.
-            if !created.succeeded() {
-                session
-                    .call(|agent, auth| agent.get(&url).header("Authorization", auth).call())?
-                    .result("creating the snip-snip bucket")?;
-            }
-        } else {
+        let bucket = Self::existing(session, account_id);
+        let found = bucket.session.send("GET", &bucket.url, None)?;
+        if found.status != 404 {
             found.result("opening the snip-snip bucket")?;
+            return Ok(bucket);
         }
-        Ok(Self { session, url })
+        let buckets = format!("{}/accounts/{account_id}/r2/buckets", bucket.session.api_url());
+        let name = json!({ "name": BUCKET }).to_string();
+        let created = bucket
+            .session
+            .send("POST", &buckets, Some(("application/json", name.as_bytes())))?;
+        // Another machine may have created it first.
+        if !created.succeeded() {
+            bucket
+                .session
+                .send("GET", &bucket.url, None)?
+                .result("creating the snip-snip bucket")?;
+        }
+        Ok(bucket)
     }
 
     /// Stores a snip and its thumbnail. The thumbnail goes first so every
     /// listed snip has one.
     pub fn upload(&self, image: &RgbaImage) -> Result<CloudSnip> {
         let snip = CloudSnip::new(SystemTime::now());
-        self.put(&snip.thumbnail_key(), &encode(&thumbnail(image))?)?;
-        self.put(&snip.image_key(), &encode(image)?)?;
+        for (key, image) in [
+            (snip.thumbnail_key(), &thumbnail(image)),
+            (snip.image_key(), image),
+        ] {
+            self.session
+                .send(
+                    "PUT",
+                    &self.object_url(&key),
+                    Some(("image/webp", &encode(image)?)),
+                )?
+                .result("uploading a cloud snip")?;
+        }
         Ok(snip)
     }
 
@@ -118,7 +127,7 @@ impl Bucket {
         );
         let result = self
             .session
-            .call(|agent, auth| agent.get(&url).header("Authorization", auth).call())?
+            .send("GET", &url, None)?
             .result("listing cloud snips")?;
         Ok(result
             .as_array()
@@ -139,42 +148,25 @@ impl Bucket {
 
     /// Removes a snip, then its thumbnail; a leftover thumbnail is never listed.
     pub fn delete(&self, snip: &CloudSnip) -> Result<()> {
-        self.delete_object(&snip.image_key())?;
-        self.delete_object(&snip.thumbnail_key())
-    }
-
-    fn put(&self, key: &str, bytes: &[u8]) -> Result<()> {
-        let url = format!("{}/objects/{key}", self.url);
-        let reply = self.session.call(|agent, auth| {
-            agent
-                .put(&url)
-                .header("Authorization", auth)
-                .header("Content-Type", "image/webp")
-                .send(bytes)
-        })?;
-        reply.result("uploading a cloud snip").map(drop)
+        for key in [snip.image_key(), snip.thumbnail_key()] {
+            let reply = self.session.send("DELETE", &self.object_url(&key), None)?;
+            if reply.status != 404 {
+                reply.result("deleting a cloud snip")?;
+            }
+        }
+        Ok(())
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/objects/{key}", self.url);
-        let reply = self
-            .session
-            .call(|agent, auth| agent.get(&url).header("Authorization", auth).call())?;
+        let reply = self.session.send("GET", &self.object_url(key), None)?;
         if !reply.succeeded() {
             return Err(reply.error("downloading a cloud snip"));
         }
         Ok(reply.body)
     }
 
-    fn delete_object(&self, key: &str) -> Result<()> {
-        let url = format!("{}/objects/{key}", self.url);
-        let reply = self
-            .session
-            .call(|agent, auth| agent.delete(&url).header("Authorization", auth).call())?;
-        if reply.status == 404 {
-            return Ok(());
-        }
-        reply.result("deleting a cloud snip").map(drop)
+    fn object_url(&self, key: &str) -> String {
+        format!("{}/objects/{key}", self.url)
     }
 }
 
@@ -189,7 +181,8 @@ fn thumbnail(image: &RgbaImage) -> RgbaImage {
     image::imageops::resize(image, size(width), size(height), FilterType::Triangle)
 }
 
-fn encode(image: &RgbaImage) -> Result<Vec<u8>> {
+/// Encodes a snip or thumbnail the way the bucket stores it.
+pub fn encode(image: &RgbaImage) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     WebPEncoder::new_lossless(&mut bytes)
         .encode(
@@ -205,6 +198,6 @@ fn encode(image: &RgbaImage) -> Result<Vec<u8>> {
 /// Decodes a stored snip or thumbnail.
 pub fn decode(bytes: &[u8]) -> Result<RgbaImage> {
     image::load_from_memory_with_format(bytes, ImageFormat::WebP)
-        .map(|image| image.to_rgba8())
+        .map(|image| image.into_rgba8())
         .map_err(|error| Error::Other(anyhow!("decoding a cloud snip: {error}")))
 }

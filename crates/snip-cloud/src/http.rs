@@ -24,6 +24,8 @@ pub(crate) fn agent() -> Agent {
 pub(crate) struct Reply {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The envelope's error codes, read once for a failed reply.
+    codes: Vec<i64>,
 }
 
 impl Reply {
@@ -31,33 +33,32 @@ impl Reply {
         let mut response = response?;
         let status = response.status().as_u16();
         let body = response.body_mut().with_config().limit(MAX_BODY).read_to_vec()?;
-        Ok(Self { status, body })
+        let codes = if (200..300).contains(&status) {
+            Vec::new()
+        } else {
+            envelope(&body)["errors"]
+                .as_array()
+                .map(|errors| errors.iter().filter_map(|e| e["code"].as_i64()).collect())
+                .unwrap_or_default()
+        };
+        Ok(Self { status, body, codes })
     }
 
     pub fn succeeded(&self) -> bool {
         (200..300).contains(&self.status)
     }
 
-    fn codes(&self) -> Vec<i64> {
-        let envelope: Value = serde_json::from_slice(&self.body).unwrap_or(Value::Null);
-        envelope["errors"]
-            .as_array()
-            .map(|errors| errors.iter().filter_map(|e| e["code"].as_i64()).collect())
-            .unwrap_or_default()
-    }
-
     /// A rejected bearer token, as opposed to a missing feature or resource.
     pub fn is_auth_failure(&self) -> bool {
-        matches!(self.status, 401 | 403) && !self.codes().contains(&NOT_ENTITLED)
+        matches!(self.status, 401 | 403) && !self.codes.contains(&NOT_ENTITLED)
     }
 
     /// The failure as an error, naming Cloudflare's own message.
     pub fn error(&self, doing: &str) -> Error {
-        if self.codes().contains(&NOT_ENTITLED) {
+        if self.codes.contains(&NOT_ENTITLED) {
             return Error::R2NotEnabled;
         }
-        let envelope: Value = serde_json::from_slice(&self.body).unwrap_or(Value::Null);
-        let message = envelope["errors"][0]["message"]
+        let message = envelope(&self.body)["errors"][0]["message"]
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| String::from_utf8_lossy(&self.body).chars().take(200).collect());
@@ -76,4 +77,8 @@ impl Reply {
             serde_json::from_slice(&self.body).map_err(|e| anyhow!("{doing}: unreadable reply: {e}"))?;
         Ok(envelope["result"].take())
     }
+}
+
+fn envelope(body: &[u8]) -> Value {
+    serde_json::from_slice(body).unwrap_or(Value::Null)
 }

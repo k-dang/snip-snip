@@ -1,41 +1,28 @@
 //! Drive the Library and the tray's copy through rendered input, with the
 //! bucket held in memory.
 
-use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::Result;
-use chrono::{DateTime, FixedOffset};
-use gpui::{AsyncWindowContext, Modifiers, Task, TestAppContext, VisualTestContext};
+use gpui::{Modifiers, TestAppContext, VisualTestContext};
 use image::Rgba;
 use snip_core::RgbaImage;
 
-use crate::cloud::{
-    CloudStore,
-    testing::{MemoryStore, signed_in},
+use crate::{
+    clipboard::{Clipboard, ClipboardService},
+    cloud::{
+        CloudStore,
+        testing::{MemoryStore, signed_in},
+    },
 };
-use crate::editor::{ExportEnvironment, ExportServices};
 
 #[derive(Default)]
-struct Clipboard(RefCell<Option<RgbaImage>>);
+struct TestClipboard(RefCell<Option<RgbaImage>>);
 
-impl ExportEnvironment for Clipboard {
-    fn directories(&self) -> (Option<PathBuf>, Option<PathBuf>) {
-        unreachable!("the Library never saves files")
-    }
-    fn local_time(&self) -> Result<DateTime<FixedOffset>> {
-        unreachable!("the Library never saves files")
-    }
-    fn write_clipboard(&self, image: RgbaImage) -> Result<()> {
-        self.0.replace(Some(image));
+impl Clipboard for TestClipboard {
+    fn write(&self, image: &RgbaImage) -> Result<()> {
+        self.0.replace(Some(image.clone()));
         Ok(())
-    }
-    fn choose_save_path(
-        self: Rc<Self>,
-        _: PathBuf,
-        _: String,
-        _: &mut AsyncWindowContext,
-    ) -> Task<Result<Option<PathBuf>>> {
-        unreachable!("the Library never saves files")
     }
 }
 
@@ -43,15 +30,15 @@ fn solid(shade: u8) -> RgbaImage {
     RgbaImage::from_pixel(64, 48, Rgba([shade, shade, shade, 255]))
 }
 
-fn setup(cx: &mut TestAppContext, images: &[RgbaImage]) -> (Arc<MemoryStore>, Rc<Clipboard>) {
+fn setup(cx: &mut TestAppContext, images: &[RgbaImage]) -> (Arc<MemoryStore>, Rc<TestClipboard>) {
     let store = Arc::new(MemoryStore::default());
     for image in images {
         store.upload(image).unwrap();
     }
-    let clipboard = Rc::new(Clipboard::default());
+    let clipboard = Rc::new(TestClipboard::default());
     cx.update(|cx| {
         cx.set_global(signed_in(store.clone()));
-        cx.set_global(ExportServices(clipboard.clone()));
+        cx.set_global(ClipboardService(clipboard.clone()));
     });
     (store, clipboard)
 }
@@ -89,9 +76,9 @@ fn clicking_a_snip_copies_it(cx: &mut TestAppContext) {
 fn deleting_takes_a_confirming_click(cx: &mut TestAppContext) {
     let (store, clipboard) = setup(cx, &[solid(90)]);
     let mut library = open_library(cx);
-    click(&mut library, "delete-0");
+    click(&mut library, "Delete");
     assert_eq!(store.snips.lock().unwrap().len(), 1);
-    click(&mut library, "delete-0");
+    click(&mut library, "Confirm delete");
     assert!(store.snips.lock().unwrap().is_empty());
     assert!(
         library

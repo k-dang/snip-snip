@@ -1,16 +1,13 @@
 //! Cloud snips in the app: the sign-in state, the saved session, and the
 //! store that Copy to cloud and the Library use. See docs/adr/0002.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc, LazyLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use gpui::{App, Global};
+use gpui::{App, Global, Task};
 use snip_cloud::{Account, Bucket, CloudSnip, Config, Session};
 use snip_core::RgbaImage;
 
@@ -64,8 +61,6 @@ pub struct Cloud {
     credentials: Arc<dyn Credentials>,
     pub state: State,
     pub error: Option<String>,
-    /// Encoded thumbnails already downloaded this run, kept until sign-out.
-    pub thumbnails: HashMap<CloudSnip, Arc<Vec<u8>>>,
 }
 
 impl Global for Cloud {}
@@ -76,7 +71,6 @@ impl Cloud {
             credentials,
             state: State::SignedOut,
             error: None,
-            thumbnails: HashMap::new(),
         }
     }
 }
@@ -187,16 +181,6 @@ pub fn retry(cx: &mut App) {
     connect(session, account, cx);
 }
 
-/// The account's R2 page, where R2 is enabled.
-pub fn r2_dashboard(cx: &App) -> Option<String> {
-    match &cx.global::<Cloud>().state {
-        State::R2NotEnabled(_, account) => {
-            Some(format!("https://dash.cloudflare.com/{}/r2/overview", account.id))
-        }
-        _ => None,
-    }
-}
-
 fn connect(session: Arc<Session>, account: Account, cx: &mut App) {
     let cloud = cx.global_mut::<Cloud>();
     cloud.state = State::Connecting;
@@ -230,7 +214,6 @@ pub fn sign_out(cx: &mut App) {
     cancel_sign_in(cx);
     let cloud = cx.global_mut::<Cloud>();
     cloud.state = State::SignedOut;
-    cloud.thumbnails.clear();
     cloud.error = cloud
         .credentials
         .clear()
@@ -243,9 +226,23 @@ fn fail(message: String, cx: &mut App) {
     cx.global_mut::<Cloud>().error = Some(message);
 }
 
-/// Describes a failed cloud operation for a status line. An ended session
-/// signs out, so cloud features disappear until the user signs in again.
-pub fn describe(error: snip_cloud::Error, cx: &mut App) -> String {
+/// Runs `work` against the signed-in bucket off the UI thread, or returns
+/// `None` when signed out. A failure comes back described for a status line;
+/// an ended session also signs out, so cloud features disappear until the user
+/// signs in again.
+pub fn run<T: Send + 'static>(
+    cx: &mut App,
+    work: impl FnOnce(&dyn CloudStore) -> snip_cloud::Result<T> + Send + 'static,
+) -> Option<Task<Result<T, String>>> {
+    let store = store(cx)?;
+    let worked = cx.background_executor().spawn(async move { work(&*store) });
+    Some(cx.spawn(async move |cx| {
+        let worked = worked.await;
+        cx.update(|cx| worked.map_err(|error| describe(error, cx)))
+    }))
+}
+
+fn describe(error: snip_cloud::Error, cx: &mut App) -> String {
     match error {
         snip_cloud::Error::SignedOut => {
             let message = "Your Cloudflare session ended. Sign in again in Settings.".to_owned();
@@ -344,7 +341,6 @@ pub mod testing {
             credentials: Arc::new(MemoryCredentials::signed_in(account.clone())),
             state: State::Ready(store, account),
             error: None,
-            thumbnails: HashMap::new(),
         }
     }
 
@@ -392,17 +388,7 @@ pub mod testing {
             Ok(found.context("no such cloud snip")?.1.clone())
         }
         fn thumbnail(&self, snip: &CloudSnip) -> snip_cloud::Result<Vec<u8>> {
-            let image = self.image(snip)?;
-            let mut bytes = Vec::new();
-            image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
-                .encode(
-                    image.as_raw(),
-                    image.width(),
-                    image.height(),
-                    image::ExtendedColorType::Rgba8,
-                )
-                .map_err(anyhow::Error::from)?;
-            Ok(bytes)
+            snip_cloud::encode(&self.image(snip)?)
         }
         fn delete(&self, snip: &CloudSnip) -> snip_cloud::Result<()> {
             self.reachable()?;

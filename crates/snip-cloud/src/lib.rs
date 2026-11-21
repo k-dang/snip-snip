@@ -6,7 +6,7 @@ mod bucket;
 mod http;
 mod session;
 
-pub use bucket::{BUCKET, Bucket, CloudSnip, THUMBNAIL_SIZE, decode};
+pub use bucket::{Bucket, CloudSnip, THUMBNAIL_SIZE, decode, encode};
 pub use session::{Account, Session, Tokens, sign_in};
 
 /// Where snip-snip signs in and which OAuth client it signs in as.
@@ -31,6 +31,11 @@ impl Config {
             client_id: "e7acbd9a90a07f07bc682e5770482f89".into(),
             redirect_port: 8976,
         }
+    }
+
+    /// The account's R2 page in the dashboard, where R2 is enabled.
+    pub fn r2_dashboard(account_id: &str) -> String {
+        format!("https://dash.cloudflare.com/{account_id}/r2/overview")
     }
 
     fn redirect_uri(&self) -> String {

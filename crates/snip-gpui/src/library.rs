@@ -1,7 +1,11 @@
 //! The Library window: the newest cloud snips as thumbnails. Clicking one
 //! copies it; Delete removes it from the bucket after a confirming click.
 
-use std::{sync::Arc, time::SystemTime};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+    time::SystemTime,
+};
 
 use gpui::{
     App, Bounds, Context, ElementId, Global, ObjectFit, RenderImage, SharedString, TitlebarOptions, Window,
@@ -9,7 +13,10 @@ use gpui::{
 };
 use snip_cloud::CloudSnip;
 
-use crate::cloud::{self, Cloud, CloudStore, State};
+use crate::{
+    cloud::{self, Cloud, CloudStore, State},
+    ui::{self, button, line},
+};
 
 // GPUI's rendered-element selectors are only available in debug builds.
 #[cfg(all(test, debug_assertions))]
@@ -24,6 +31,32 @@ const WORKERS: usize = 4;
 struct LibraryWindow(Option<WindowHandle<Library>>);
 
 impl Global for LibraryWindow {}
+
+/// Encoded thumbnails downloaded this run, valid for one signed-in bucket.
+#[derive(Default)]
+struct Thumbnails {
+    store: Option<Weak<dyn CloudStore>>,
+    bytes: HashMap<CloudSnip, Arc<Vec<u8>>>,
+}
+
+impl Global for Thumbnails {}
+
+/// The cache for the current bucket, emptied after a sign-out or account change.
+fn thumbnails(cx: &mut App) -> &mut HashMap<CloudSnip, Arc<Vec<u8>>> {
+    let current = cloud::store(cx).map(|store| Arc::downgrade(&store));
+    let cache = cx.default_global::<Thumbnails>();
+    let same = match (&cache.store, &current) {
+        (Some(cached), Some(current)) => cached.ptr_eq(current),
+        _ => false,
+    };
+    if !same {
+        *cache = Thumbnails {
+            store: current,
+            bytes: HashMap::new(),
+        };
+    }
+    &mut cache.bytes
+}
 
 pub struct Library {
     /// `None` until the first listing arrives.
@@ -48,28 +81,22 @@ pub fn open(cx: &mut App) {
 /// Copies the newest cloud snip, from the tray. Failures open the Library to
 /// explain, since the tray has nowhere to show them.
 pub fn copy_latest(cx: &mut App) {
-    let Some(store) = cloud::store(cx) else {
+    let Some(latest) = cloud::run(cx, |store| match store.latest(1)?.first() {
+        Some(snip) => store.image(snip).map(Some),
+        None => Ok(None),
+    }) else {
         return;
     };
-    let latest = cx.background_executor().spawn(async move {
-        match store.latest(1)?.first() {
-            Some(snip) => store.image(snip).map(Some),
-            None => Ok(None),
-        }
-    });
     cx.spawn(async move |cx| {
         let latest = latest.await;
         cx.update(|cx| {
             let failure = match latest {
-                Ok(Some(image)) => match crate::editor::write_clipboard(image, cx) {
+                Ok(Some(image)) => match crate::clipboard::write(&image, cx) {
                     Ok(()) => return,
                     Err(error) => format!("Could not copy the latest cloud snip: {error:#}"),
                 },
                 Ok(None) => "There are no cloud snips yet.".to_owned(),
-                Err(error) => format!(
-                    "Could not copy the latest cloud snip: {}",
-                    cloud::describe(error, cx)
-                ),
+                Err(message) => format!("Could not copy the latest cloud snip: {message}"),
             };
             show(Some(failure.into()), cx);
         });
@@ -130,14 +157,10 @@ fn show(status: Option<SharedString>, cx: &mut App) {
 
 impl Library {
     fn reload(&mut self, cx: &mut Context<Self>) {
-        let Some(store) = cloud::store(cx) else {
+        let Some(listing) = cloud::run(cx, |store| store.latest(LIMIT)) else {
             return;
         };
         self.confirming = None;
-        let listing = cx.background_executor().spawn({
-            let store = store.clone();
-            async move { store.latest(LIMIT) }
-        });
         cx.spawn(async move |this, cx| {
             let listed = listing.await;
             let Ok(missing) = this.update(cx, |this, cx| this.listed(listed, cx)) else {
@@ -146,27 +169,27 @@ impl Library {
             // Interleave so the newest thumbnails arrive first.
             for worker in 0..WORKERS {
                 let share: Vec<_> = missing.iter().skip(worker).step_by(WORKERS).cloned().collect();
-                let store = store.clone();
-                this.update(cx, |_, cx| {
-                    cx.spawn(async move |this, cx| {
-                        for snip in share {
-                            let cached = cx.update(|cx| cx.global::<Cloud>().thumbnails.get(&snip).cloned());
-                            let fetched = cx
-                                .background_executor()
-                                .spawn({
-                                    let (store, snip) = (store.clone(), snip.clone());
-                                    async move { thumbnail(&*store, &snip, cached) }
-                                })
-                                .await;
-                            let shown = this.update(cx, |this, cx| this.thumbnail_arrived(snip, fetched, cx));
-                            if shown.is_err() {
-                                return;
-                            }
+                let this = this.clone();
+                cx.spawn(async move |cx| {
+                    for snip in share {
+                        let fetch = cx.update(|cx| {
+                            let cached = thumbnails(cx).get(&snip).cloned();
+                            let fetching = snip.clone();
+                            cloud::run(cx, move |store| thumbnail(store, &fetching, cached))
+                        });
+                        let Some(fetch) = fetch else {
+                            return;
+                        };
+                        let fetched = fetch.await;
+                        if this
+                            .update(cx, |this, cx| this.thumbnail_arrived(snip, fetched, cx))
+                            .is_err()
+                        {
+                            return;
                         }
-                    })
-                    .detach();
+                    }
                 })
-                .ok();
+                .detach();
             }
         })
         .detach();
@@ -174,16 +197,11 @@ impl Library {
 
     /// Shows a listing, keeping thumbnails already on screen, and returns the
     /// snips that still need one.
-    fn listed(
-        &mut self,
-        listed: snip_cloud::Result<Vec<CloudSnip>>,
-        cx: &mut Context<Self>,
-    ) -> Vec<CloudSnip> {
+    fn listed(&mut self, listed: Result<Vec<CloudSnip>, String>, cx: &mut Context<Self>) -> Vec<CloudSnip> {
         let snips = match listed {
             Ok(snips) => snips,
-            Err(error) => {
-                self.status =
-                    Some(format!("Could not list cloud snips: {}", cloud::describe(error, cx)).into());
+            Err(message) => {
+                self.status = Some(format!("Could not list cloud snips: {message}").into());
                 cx.notify();
                 return Vec::new();
             }
@@ -218,42 +236,38 @@ impl Library {
     fn thumbnail_arrived(
         &mut self,
         snip: CloudSnip,
-        fetched: snip_cloud::Result<(Arc<Vec<u8>>, Arc<RenderImage>)>,
+        fetched: Result<(Arc<Vec<u8>>, Arc<RenderImage>), String>,
         cx: &mut Context<Self>,
     ) {
         match fetched {
             Ok((bytes, image)) => {
-                cx.global_mut::<Cloud>().thumbnails.insert(snip.clone(), bytes);
+                thumbnails(cx).insert(snip.clone(), bytes);
                 match self.tiles.iter_mut().flatten().find(|tile| tile.snip == snip) {
                     Some(tile) => self.released.extend(tile.thumbnail.replace(image)),
                     None => self.released.push(image),
                 }
             }
-            Err(error) => {
-                self.status =
-                    Some(format!("Could not load a thumbnail: {}", cloud::describe(error, cx)).into());
-            }
+            Err(message) => self.status = Some(format!("Could not load a thumbnail: {message}").into()),
         }
         cx.notify();
     }
 
     fn copy(&mut self, snip: CloudSnip, label: SharedString, cx: &mut Context<Self>) {
-        let Some(store) = cloud::store(cx) else {
+        let Some(image) = cloud::run(cx, move |store| store.image(&snip)) else {
             return;
         };
         self.confirming = None;
         self.status = Some("Copying…".into());
         cx.notify();
-        let image = cx.background_executor().spawn(async move { store.image(&snip) });
         cx.spawn(async move |this, cx| {
             let image = image.await;
             this.update(cx, |this, cx| {
                 let status = match image {
-                    Ok(image) => match crate::editor::write_clipboard(image, cx) {
+                    Ok(image) => match crate::clipboard::write(&image, cx) {
                         Ok(()) => format!("Copied the snip from {label}"),
                         Err(error) => format!("Copy failed: {error:#}"),
                     },
-                    Err(error) => format!("Copy failed: {}", cloud::describe(error, cx)),
+                    Err(message) => format!("Copy failed: {message}"),
                 };
                 this.status = Some(status.into());
                 cx.notify();
@@ -264,35 +278,31 @@ impl Library {
     }
 
     fn delete(&mut self, snip: CloudSnip, cx: &mut Context<Self>) {
-        let Some(store) = cloud::store(cx) else {
-            return;
-        };
         if self.confirming.as_ref() != Some(&snip) {
             self.confirming = Some(snip);
             return cx.notify();
         }
+        let deleting = snip.clone();
+        let Some(deleted) = cloud::run(cx, move |store| store.delete(&deleting)) else {
+            return;
+        };
         self.confirming = None;
         self.status = Some("Deleting…".into());
         cx.notify();
-        let deleted = cx.background_executor().spawn({
-            let snip = snip.clone();
-            async move { store.delete(&snip) }
-        });
         cx.spawn(async move |this, cx| {
             let deleted = deleted.await;
             this.update(cx, |this, cx| {
                 this.status = Some(match deleted {
                     Ok(()) => {
-                        cx.global_mut::<Cloud>().thumbnails.remove(&snip);
-                        if let Some(tiles) = &mut this.tiles {
-                            let removed = tiles.iter().position(|tile| tile.snip == snip);
-                            if let Some(tile) = removed.map(|index| tiles.remove(index)) {
-                                this.released.extend(tile.thumbnail);
-                            }
+                        thumbnails(cx).remove(&snip);
+                        if let Some(tiles) = &mut this.tiles
+                            && let Some(index) = tiles.iter().position(|tile| tile.snip == snip)
+                        {
+                            this.released.extend(tiles.remove(index).thumbnail);
                         }
                         "Deleted the snip".into()
                     }
-                    Err(error) => format!("Delete failed: {}", cloud::describe(error, cx)).into(),
+                    Err(message) => format!("Delete failed: {message}").into(),
                 });
                 cx.notify();
             })
@@ -316,7 +326,7 @@ impl Library {
             .rounded_md()
             .border_1()
             .border_color(rgb(0x3a414b))
-            .hover(|style| style.border_color(rgb(0x71b7ff)))
+            .hover(|style| style.border_color(rgb(ui::FOCUS)))
             .cursor_pointer()
             .child(
                 div()
@@ -338,20 +348,17 @@ impl Library {
                     .text_size(px(13.))
                     .child(div().flex_1().child(tile.label.clone()))
                     .child(
-                        div()
-                            .id(ElementId::NamedInteger("delete".into(), index as u64))
-                            .debug_selector(move || format!("delete-{index}"))
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(if confirming { rgb(0xffb8a8) } else { rgb(0x58616e) })
-                            .text_color(if confirming { rgb(0xffb8a8) } else { rgb(0xf1f3f5) })
-                            .child(if confirming { "Confirm delete" } else { "Delete" })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.delete(delete.clone(), cx);
-                            })),
+                        button(
+                            format!("delete-{index}"),
+                            if confirming { "Confirm delete" } else { "Delete" },
+                        )
+                        .when(confirming, |button| {
+                            button.border_color(rgb(ui::ERROR)).text_color(rgb(ui::ERROR))
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.delete(delete.clone(), cx);
+                        })),
                     ),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.copy(copy.clone(), label.clone(), cx)))
@@ -376,23 +383,14 @@ impl Render for Library {
             .children(
                 account
                     .clone()
-                    .map(|name| div().text_color(rgb(0x9aa3ad)).child(name)),
+                    .map(|name| div().text_color(rgb(ui::MUTED)).child(name)),
             )
             .when(account.is_some(), |header| {
                 header.child(
-                    div()
-                        .id("refresh")
-                        .debug_selector(|| "Refresh".into())
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(rgb(0x58616e))
-                        .cursor_pointer()
-                        .child("Refresh")
-                        .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                    button("refresh", "Refresh").on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                 )
             });
+        let message = |text: &'static str| line(text).text_color(rgb(ui::MUTED)).into_any_element();
         let body = if account.is_none() {
             message("Sign in with Cloudflare in Settings to see your cloud snips.")
         } else {
@@ -418,29 +416,17 @@ impl Render for Library {
             .flex_col()
             .gap_3()
             .p_5()
-            .bg(rgb(0x20242a))
-            .text_color(rgb(0xf1f3f5))
+            .bg(rgb(ui::SURFACE))
+            .text_color(rgb(ui::TEXT))
             .text_size(px(15.))
             .child(header)
-            .children(self.status.clone().map(|status| {
-                div()
-                    .debug_selector({
-                        let status = status.to_string();
-                        move || status
-                    })
-                    .text_color(rgb(0xa8d9c0))
-                    .child(status)
-            }))
+            .children(
+                self.status
+                    .clone()
+                    .map(|status| line(status).text_color(rgb(ui::SUCCESS))),
+            )
             .child(body)
     }
-}
-
-fn message(text: &'static str) -> gpui::AnyElement {
-    div()
-        .debug_selector(move || text.into())
-        .text_color(rgb(0x9aa3ad))
-        .child(text)
-        .into_any_element()
 }
 
 fn thumbnail(

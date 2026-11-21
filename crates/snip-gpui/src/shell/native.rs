@@ -1,7 +1,5 @@
 //! Native resources share GPUI's main-thread Windows/AppKit event loop.
 
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use futures::channel::mpsc::UnboundedSender;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
@@ -12,7 +10,6 @@ use tray_icon::{
 };
 
 use super::{ShellEvent, ShellPlatform};
-use crate::cloud::{Credentials, Keychain};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -118,9 +115,6 @@ impl ShellPlatform for NativeShell {
         #[cfg(windows)]
         finish_composition();
         crate::overlay::start(cx);
-    }
-    fn credentials(&self) -> Arc<dyn Credentials> {
-        Arc::new(Keychain)
     }
     fn show_cloud_menu(&mut self, visible: bool) -> Result<()> {
         if visible == self.cloud_shown {

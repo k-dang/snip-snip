@@ -1,7 +1,6 @@
 //! Clipboard, PNG, and cloud export.
 
 use std::{
-    borrow::Cow,
     fs,
     io::ErrorKind,
     path::PathBuf,
@@ -13,14 +12,12 @@ use anyhow::{Context as _, Result};
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use futures::channel::oneshot;
 use gpui::{App, AsyncWindowContext, Context, Global, Task, Window};
-use snip_core::RgbaImage;
 
 use super::Editor;
 
-pub(crate) trait ExportEnvironment {
+pub(super) trait ExportEnvironment {
     fn directories(&self) -> (Option<PathBuf>, Option<PathBuf>);
     fn local_time(&self) -> Result<DateTime<FixedOffset>>;
-    fn write_clipboard(&self, image: RgbaImage) -> Result<()>;
     fn choose_save_path(
         self: Rc<Self>,
         directory: PathBuf,
@@ -29,7 +26,7 @@ pub(crate) trait ExportEnvironment {
     ) -> Task<Result<Option<PathBuf>>>;
 }
 
-pub(crate) struct ExportServices(pub Rc<dyn ExportEnvironment>);
+pub(super) struct ExportServices(pub Rc<dyn ExportEnvironment>);
 
 impl Global for ExportServices {}
 
@@ -56,17 +53,6 @@ impl ExportEnvironment for NativeExport {
             .single()
             .map(|time| time.fixed_offset())
             .context("converting the current time to local time")
-    }
-
-    fn write_clipboard(&self, image: RgbaImage) -> Result<()> {
-        // GPUI only writes PNG; arboard also supplies Windows bitmap formats.
-        let data = arboard::ImageData {
-            width: image.width() as usize,
-            height: image.height() as usize,
-            bytes: Cow::Owned(image.into_raw()),
-        };
-        arboard::Clipboard::new()?.set_image(data)?;
-        Ok(())
     }
 
     fn choose_save_path(
@@ -129,8 +115,7 @@ fn save_defaults(directory: PathBuf, time: DateTime<FixedOffset>) -> Result<(Pat
 impl Editor {
     pub(super) fn copy(&mut self, close_after_copy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let image = self.export(window);
-        let environment = cx.default_global::<ExportServices>().0.clone();
-        self.status = match environment.write_clipboard(image) {
+        self.status = match crate::clipboard::write(&image, cx) {
             Ok(()) if close_after_copy => {
                 window.remove_window();
                 return;
@@ -144,32 +129,27 @@ impl Editor {
     /// Copies like Copy & Close and also uploads the snip, closing once it
     /// lands. A failed upload keeps the editor open so the snip isn't lost.
     pub(super) fn copy_to_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(store) = crate::cloud::store(cx) else {
-            return;
-        };
-        if self.uploading {
+        if self.uploading || crate::cloud::store(cx).is_none() {
             return;
         }
         let image = self.export(window);
-        let environment = cx.default_global::<ExportServices>().0.clone();
-        if let Err(error) = environment.write_clipboard(image.clone()) {
+        if let Err(error) = crate::clipboard::write(&image, cx) {
             self.status = format!("Copy failed: {error:#}").into();
             return cx.notify();
         }
+        let Some(upload) = crate::cloud::run(cx, move |store| store.upload(&image)) else {
+            return;
+        };
         self.uploading = true;
         self.status = "Uploading to the cloud…".into();
         cx.notify();
-        let upload = cx
-            .background_executor()
-            .spawn(async move { store.upload(&image) });
         cx.spawn_in(window, async move |this, cx| {
             let uploaded = upload.await;
             this.update_in(cx, |this, window, cx| match uploaded {
                 Ok(_) => window.remove_window(),
-                Err(error) => {
+                Err(message) => {
                     this.uploading = false;
-                    this.status =
-                        format!("Copy to cloud failed: {}", crate::cloud::describe(error, cx)).into();
+                    this.status = format!("Copy to cloud failed: {message}").into();
                     cx.notify();
                 }
             })
