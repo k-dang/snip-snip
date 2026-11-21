@@ -29,9 +29,12 @@ the snips you upload and delete only those.
 
 - **Copy to cloud.** Snip the fixture, use the Export menu's Copy to cloud with
   `click-screen`, and confirm the editor closed. Read the clipboard.
-- **Round trip.** Tray → Copy latest cloud snip, read the clipboard, and
+- **Sign in.** `shell-menu settings`, then `click-desktop` on Sign in with
+  Cloudflare from a fresh `shot`. Wait for the person to approve; `cmdkey /list`
+  shows the `snip-snip` entries once the account is saved.
+- **Round trip.** `shell-menu cloud-latest`, read the clipboard, and
   `compare` it with the Copy to cloud clipboard capture.
-- **Library.** Open Cloud library, `shot` it, click the newest tile, and
+- **Library.** `shell-menu cloud-library`, `shot` it, click the newest tile, and
   compare the clipboard. Delete the uploaded snip with two clicks.
 - **Errors, when affected.** Controlled tests cover upload, listing and
   session failures with an in-memory bucket and a local Cloudflare stand-in.
