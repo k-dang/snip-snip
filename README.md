@@ -31,7 +31,7 @@ The app lives in the tray / menu bar. Press `Alt+Shift+S` (changeable in **Setti
 | `Ctrl/Cmd+scroll`, `Space`+drag | Zoom, pan |
 | `Ctrl/Cmd+0`, `Ctrl/Cmd+1` | Fit, 100% |
 | `Ctrl/Cmd+C` | Copy and close |
-| `Ctrl/Cmd+U` | Copy to cloud and close (signed in) |
+| `Ctrl/Cmd+Shift+D` | Copy to cloud and close (signed in) |
 | `Ctrl/Cmd+S` | Save as PNG |
 | `Esc` | Back out of the current action, then close |
 
