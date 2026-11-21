@@ -1,9 +1,12 @@
 //! Cloud snips in the app: the sign-in state, the saved session, and the
 //! store that Copy to cloud and the Library use. See docs/adr/0002.
 
-use std::sync::{
-    Arc, LazyLock,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -61,6 +64,8 @@ pub struct Cloud {
     credentials: Arc<dyn Credentials>,
     pub state: State,
     pub error: Option<String>,
+    /// Encoded thumbnails already downloaded this run, kept until sign-out.
+    pub thumbnails: HashMap<CloudSnip, Arc<Vec<u8>>>,
 }
 
 impl Global for Cloud {}
@@ -71,6 +76,7 @@ impl Cloud {
             credentials,
             state: State::SignedOut,
             error: None,
+            thumbnails: HashMap::new(),
         }
     }
 }
@@ -224,6 +230,7 @@ pub fn sign_out(cx: &mut App) {
     cancel_sign_in(cx);
     let cloud = cx.global_mut::<Cloud>();
     cloud.state = State::SignedOut;
+    cloud.thumbnails.clear();
     cloud.error = cloud
         .credentials
         .clear()
@@ -337,6 +344,7 @@ pub mod testing {
             credentials: Arc::new(MemoryCredentials::signed_in(account.clone())),
             state: State::Ready(store, account),
             error: None,
+            thumbnails: HashMap::new(),
         }
     }
 

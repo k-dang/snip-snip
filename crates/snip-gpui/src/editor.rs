@@ -41,6 +41,18 @@ const CANVAS_PADDING: f32 = 16.0;
 static VERIFY_VIEW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 const HANDLE_SIZE: f32 = 8.0;
 
+#[cfg(test)]
+pub(crate) use export::ExportEnvironment;
+pub(crate) use export::ExportServices;
+
+/// Writes an image to the clipboard through the app's export services.
+pub(crate) fn write_clipboard(image: RgbaImage, cx: &mut App) -> anyhow::Result<()> {
+    cx.default_global::<ExportServices>()
+        .0
+        .clone()
+        .write_clipboard(image)
+}
+
 /// Opens an editor window for a freshly snipped image. `scale` is the source
 /// monitor's image pixels per logical pixel, so the window opens at the size
 /// the region had on screen.

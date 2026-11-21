@@ -7,6 +7,7 @@ mod cloud;
 mod drag;
 mod editor;
 mod icon;
+mod library;
 mod overlay;
 mod shell;
 

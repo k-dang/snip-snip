@@ -17,7 +17,7 @@ use snip_core::RgbaImage;
 
 use super::Editor;
 
-pub(super) trait ExportEnvironment {
+pub(crate) trait ExportEnvironment {
     fn directories(&self) -> (Option<PathBuf>, Option<PathBuf>);
     fn local_time(&self) -> Result<DateTime<FixedOffset>>;
     fn write_clipboard(&self, image: RgbaImage) -> Result<()>;
@@ -29,7 +29,7 @@ pub(super) trait ExportEnvironment {
     ) -> Task<Result<Option<PathBuf>>>;
 }
 
-pub(super) struct ExportServices(pub Rc<dyn ExportEnvironment>);
+pub(crate) struct ExportServices(pub Rc<dyn ExportEnvironment>);
 
 impl Global for ExportServices {}
 

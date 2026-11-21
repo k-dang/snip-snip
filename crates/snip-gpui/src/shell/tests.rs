@@ -19,6 +19,7 @@ struct NativeState {
     recorded: Option<HotKey>,
     fail_release: Option<HotKey>,
     credentials: Arc<MemoryCredentials>,
+    cloud_menu: bool,
 }
 
 struct TestPlatform(Rc<RefCell<NativeState>>);
@@ -55,6 +56,10 @@ impl ShellPlatform for TestPlatform {
     }
     fn credentials(&self) -> Arc<dyn Credentials> {
         self.0.borrow().credentials.clone()
+    }
+    fn show_cloud_menu(&mut self, visible: bool) -> Result<()> {
+        self.0.borrow_mut().cloud_menu = visible;
+        Ok(())
     }
 }
 
@@ -500,7 +505,7 @@ fn signing_out_forgets_the_saved_cloud_session(cx: &mut TestAppContext) {
     let (tx, rx) = mpsc::unbounded();
     cx.update(|cx| {
         super::install(
-            Box::new(TestPlatform(native)),
+            Box::new(TestPlatform(native.clone())),
             folder.path().join("shortcut"),
             rx,
             cx,
@@ -508,6 +513,7 @@ fn signing_out_forgets_the_saved_cloud_session(cx: &mut TestAppContext) {
     });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
+    assert!(native.borrow().cloud_menu);
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
     assert!(view.debug_bounds("Signed in to Kevin's Account").is_some());
@@ -515,4 +521,5 @@ fn signing_out_forgets_the_saved_cloud_session(cx: &mut TestAppContext) {
     view.run_until_parked();
     assert!(view.debug_bounds("Sign in with Cloudflare").is_some());
     assert!(credentials.load().unwrap().is_none());
+    assert!(!native.borrow().cloud_menu);
 }

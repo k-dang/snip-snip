@@ -24,6 +24,8 @@ mod tests;
 pub enum ShellEvent {
     Settings,
     NewSnip,
+    CopyLatestCloudSnip,
+    CloudLibrary,
     Hotkey { id: u32, pressed: bool },
     Quit,
 }
@@ -38,6 +40,8 @@ pub trait ShellPlatform {
     fn dismiss_menu(&mut self) -> Result<()>;
     /// Where the cloud session is saved.
     fn credentials(&self) -> Arc<dyn Credentials>;
+    /// Shows the tray's cloud items only while signed in.
+    fn show_cloud_menu(&mut self, visible: bool) -> Result<()>;
 }
 
 pub struct Shell {
@@ -117,6 +121,16 @@ pub fn install(
     if show_error {
         settings::open(cx);
     }
+    cx.observe_global::<cloud::Cloud>(|cx| {
+        let signed_in = cloud::store(cx).is_some();
+        if cx.has_global::<Shell>()
+            && let Err(error) =
+                cx.update_global::<Shell, _>(|shell, _| shell.platform.show_cloud_menu(signed_in))
+        {
+            eprintln!("shell: could not update the cloud menu items: {error:#}");
+        }
+    })
+    .detach();
     cx.on_app_quit(|cx| {
         if cx.has_global::<Shell>() {
             cx.remove_global::<Shell>();
@@ -151,6 +165,8 @@ pub fn install(
                 }
                 match event {
                     ShellEvent::Settings => settings::open(cx),
+                    ShellEvent::CopyLatestCloudSnip => crate::library::copy_latest(cx),
+                    ShellEvent::CloudLibrary => crate::library::open(cx),
                     ShellEvent::NewSnip => cx.update_global::<Shell, _>(|shell, cx| {
                         if !shell.recording {
                             shell.platform.capture(cx);
