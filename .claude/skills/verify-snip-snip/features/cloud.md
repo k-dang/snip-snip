@@ -9,7 +9,7 @@ own account and pasted on any machine signed in to the same account. See
 - Settings: Sign in with Cloudflare (browser consent, loopback callback on
   `127.0.0.1:8976`), account picker, R2-not-enabled prompt with Retry, Sign out.
 - The session restores on launch without a network call.
-- Editor Export menu: Copy to cloud (`mod+shift+c`) copies, uploads, then
+- Editor Export menu: Copy to cloud (`mod+u`) copies, uploads, then
   closes; a failed upload keeps the editor open with the error.
 - Tray / menu bar, only while signed in: Copy latest cloud snip and Cloud library.
 - Library: newest 100 snips as thumbnails; click copies; Delete takes a second click.
@@ -38,6 +38,7 @@ the snips you upload and delete only those.
 
 ## Gotchas
 
-- `mod+shift+c` may be globally reserved on Windows (it once was for Copy &
-  Close). Use `probe-shortcut` to diagnose, then use the Export menu item.
+- Copy to cloud avoids `mod+shift+c`: another app reserves it globally on the
+  Windows verification machine, along with `ctrl+shift+u` and `ctrl+shift+x`.
+  If `mod+u` doesn't reach the editor, diagnose with `probe-shortcut`.
 - Signing out clears this machine's saved session and thumbnails only.

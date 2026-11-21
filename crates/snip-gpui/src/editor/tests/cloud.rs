@@ -13,7 +13,7 @@ fn signed_in_editor(cx: &mut TestAppContext) -> (VisualTestContext, Arc<MemorySt
 
 fn copy_to_cloud(cx: &mut VisualTestContext) {
     let modifier = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
-    cx.simulate_keystrokes(&format!("{modifier}-shift-c"));
+    cx.simulate_keystrokes(&format!("{modifier}-u"));
     cx.run_until_parked();
 }
 
