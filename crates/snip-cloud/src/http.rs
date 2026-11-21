@@ -24,8 +24,9 @@ pub(crate) fn agent() -> Agent {
 pub(crate) struct Reply {
     pub status: u16,
     pub body: Vec<u8>,
-    /// The envelope's error codes, read once for a failed reply.
+    /// The envelope's error codes and first message, read once for a failure.
     codes: Vec<i64>,
+    message: Option<String>,
 }
 
 impl Reply {
@@ -33,15 +34,25 @@ impl Reply {
         let mut response = response?;
         let status = response.status().as_u16();
         let body = response.body_mut().with_config().limit(MAX_BODY).read_to_vec()?;
-        let codes = if (200..300).contains(&status) {
-            Vec::new()
-        } else {
-            envelope(&body)["errors"]
-                .as_array()
-                .map(|errors| errors.iter().filter_map(|e| e["code"].as_i64()).collect())
-                .unwrap_or_default()
-        };
-        Ok(Self { status, body, codes })
+        let (mut codes, mut message) = (Vec::new(), None);
+        if !(200..300).contains(&status) {
+            let envelope: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let errors = envelope["errors"].as_array().into_iter().flatten();
+            codes = errors
+                .clone()
+                .filter_map(|error| error["code"].as_i64())
+                .collect();
+            message = errors
+                .filter_map(|error| error["message"].as_str())
+                .next()
+                .map(str::to_owned);
+        }
+        Ok(Self {
+            status,
+            body,
+            codes,
+            message,
+        })
     }
 
     pub fn succeeded(&self) -> bool {
@@ -58,9 +69,9 @@ impl Reply {
         if self.codes.contains(&NOT_ENTITLED) {
             return Error::R2NotEnabled;
         }
-        let message = envelope(&self.body)["errors"][0]["message"]
-            .as_str()
-            .map(str::to_owned)
+        let message = self
+            .message
+            .clone()
             .unwrap_or_else(|| String::from_utf8_lossy(&self.body).chars().take(200).collect());
         Error::Other(anyhow!(
             "{doing}: Cloudflare returned {} ({message})",
@@ -68,17 +79,19 @@ impl Reply {
         ))
     }
 
-    /// The `result` of a successful Cloudflare API envelope.
-    pub fn result(self, doing: &str) -> Result<Value> {
+    /// The body of a successful reply.
+    pub fn body(self, doing: &str) -> Result<Vec<u8>> {
         if !self.succeeded() {
             return Err(self.error(doing));
         }
+        Ok(self.body)
+    }
+
+    /// The `result` of a successful Cloudflare API envelope.
+    pub fn result(self, doing: &str) -> Result<Value> {
+        let body = self.body(doing)?;
         let mut envelope: Value =
-            serde_json::from_slice(&self.body).map_err(|e| anyhow!("{doing}: unreadable reply: {e}"))?;
+            serde_json::from_slice(&body).map_err(|e| anyhow!("{doing}: unreadable reply: {e}"))?;
         Ok(envelope["result"].take())
     }
-}
-
-fn envelope(body: &[u8]) -> Value {
-    serde_json::from_slice(body).unwrap_or(Value::Null)
 }

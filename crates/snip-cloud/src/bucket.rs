@@ -158,11 +158,9 @@ impl Bucket {
     }
 
     fn get(&self, key: &str) -> Result<Vec<u8>> {
-        let reply = self.session.send("GET", &self.object_url(key), None)?;
-        if !reply.succeeded() {
-            return Err(reply.error("downloading a cloud snip"));
-        }
-        Ok(reply.body)
+        self.session
+            .send("GET", &self.object_url(key), None)?
+            .body("downloading a cloud snip")
     }
 
     fn object_url(&self, key: &str) -> String {

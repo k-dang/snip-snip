@@ -129,6 +129,7 @@ impl Editor {
     /// Copies like Copy & Close and also uploads the snip, closing once it
     /// lands. A failed upload keeps the editor open so the snip isn't lost.
     pub(super) fn copy_to_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Checked before copying, so a signed-out shortcut leaves the clipboard alone.
         if self.uploading || crate::cloud::store(cx).is_none() {
             return;
         }

@@ -13,7 +13,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use global_hotkey::hotkey::HotKey;
 use gpui::{App, BorrowAppContext, Global, WindowHandle};
 
-use crate::cloud::{self, Keychain};
+use crate::cloud::{self, Credentials, Keychain};
 
 mod native;
 mod settings;
@@ -57,12 +57,16 @@ pub struct Shell {
 
 impl Global for Shell {}
 
+/// Installs the shell and the cloud state Settings and the tray depend on.
+/// `credentials` is where the cloud session is saved.
 pub fn install(
     mut platform: Box<dyn ShellPlatform>,
     path: PathBuf,
+    credentials: Arc<dyn Credentials>,
     mut events: UnboundedReceiver<ShellEvent>,
     cx: &mut App,
 ) {
+    cloud::install(credentials, cx);
     let (shortcut, mut error) = match fs::read_to_string(&path) {
         Ok(saved) => match saved
             .trim()
@@ -217,12 +221,11 @@ fn dismiss_menu(cx: &mut App) -> bool {
 pub fn start(cx: &mut App) -> Result<()> {
     let (tx, rx) = futures::channel::mpsc::unbounded();
     let platform = native::NativeShell::new(tx)?;
-    cloud::install(Arc::new(Keychain), cx);
     let path = dirs::config_dir()
         .context("locating the user settings folder")?
         .join("snip-snip")
         .join("shortcut");
-    install(Box::new(platform), path, rx, cx);
+    install(Box::new(platform), path, Arc::new(Keychain), rx, cx);
     eprintln!(
         "snip-snip running; capture shortcut: {}",
         shortcut::label(cx.global::<Shell>().shortcut)

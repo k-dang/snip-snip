@@ -315,7 +315,8 @@ fn cloud_section(cx: &App) -> impl IntoElement {
         .gap_3()
         .mt_3()
         .child(div().text_size(px(20.)).child("Cloud snips"));
-    let section = match &cloud.state {
+    let sign_out = || button("cloud-sign-out", "Sign out").on_click(|_, _, cx| cloud::sign_out(cx));
+    let section = match cloud.state() {
         State::SignedOut => section
             .child(line(
                 "Copy snips between your machines through an R2 bucket in your Cloudflare account.",
@@ -332,8 +333,9 @@ fn cloud_section(cx: &App) -> impl IntoElement {
                 let chosen = account.clone();
                 button(format!("cloud-account-{}", account.id), account.name.clone())
                     .on_click(move |_, _, cx| cloud::choose_account(chosen.clone(), cx))
-            }))),
-        State::Connecting => section.child(line("Setting up the snip-snip bucket…")),
+            })))
+            .child(row().child(sign_out())),
+        State::Connecting(_) => section.child(line("Setting up the snip-snip bucket…")),
         State::R2NotEnabled(_, account) => {
             let dashboard = snip_cloud::Config::r2_dashboard(&account.id);
             section
@@ -346,26 +348,22 @@ fn cloud_section(cx: &App) -> impl IntoElement {
                         .child(
                             button("cloud-open-r2", "Open R2 in Cloudflare").on_click(move |_, _, cx| {
                                 if let Err(error) = open::that(&dashboard) {
-                                    cx.global_mut::<Cloud>().error =
-                                        Some(format!("Could not open the browser: {error}"));
+                                    cloud::report(format!("Could not open the browser: {error}"), cx);
                                 }
                             }),
                         )
                         .child(button("cloud-retry", "Retry").on_click(|_, _, cx| cloud::retry(cx)))
-                        .child(button("cloud-sign-out", "Sign out").on_click(|_, _, cx| cloud::sign_out(cx))),
+                        .child(sign_out()),
                 )
         }
-        State::Ready(_, account) => section
-            .child(line(format!("Signed in to {}", account.name)))
-            .child(
-                row().child(button("cloud-sign-out", "Sign out").on_click(|_, _, cx| cloud::sign_out(cx))),
-            ),
+        State::Ready(connection) => section
+            .child(line(format!("Signed in to {}", connection.account.name)))
+            .child(row().child(sign_out())),
     };
     section.children(
         cloud
-            .error
-            .clone()
-            .map(|message| line(message).text_color(rgb(ui::ERROR))),
+            .error()
+            .map(|message| line(message.to_owned()).text_color(rgb(ui::ERROR))),
     )
 }
 

@@ -2,19 +2,20 @@
 //! copies it; Delete removes it from the bucket after a confirming click.
 
 use std::{
-    collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
+use futures::{StreamExt, channel::mpsc};
 use gpui::{
-    App, Bounds, Context, ElementId, Global, ObjectFit, RenderImage, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, img, prelude::*, px, rgb, size,
+    App, Bounds, Context, ElementId, Global, ObjectFit, RenderImage, SharedString, Task, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowOptions, div, img, prelude::*, px, rgb, size,
 };
 use snip_cloud::CloudSnip;
+use snip_core::RgbaImage;
 
 use crate::{
-    cloud::{self, Cloud, CloudStore, State},
+    cloud::{self, CloudStore},
     ui::{self, button, line},
 };
 
@@ -32,40 +33,19 @@ struct LibraryWindow(Option<WindowHandle<Library>>);
 
 impl Global for LibraryWindow {}
 
-/// Encoded thumbnails downloaded this run, valid for one signed-in bucket.
-#[derive(Default)]
-struct Thumbnails {
-    store: Option<Weak<dyn CloudStore>>,
-    bytes: HashMap<CloudSnip, Arc<Vec<u8>>>,
-}
-
-impl Global for Thumbnails {}
-
-/// The cache for the current bucket, emptied after a sign-out or account change.
-fn thumbnails(cx: &mut App) -> &mut HashMap<CloudSnip, Arc<Vec<u8>>> {
-    let current = cloud::store(cx).map(|store| Arc::downgrade(&store));
-    let cache = cx.default_global::<Thumbnails>();
-    let same = match (&cache.store, &current) {
-        (Some(cached), Some(current)) => cached.ptr_eq(current),
-        _ => false,
-    };
-    if !same {
-        *cache = Thumbnails {
-            store: current,
-            bytes: HashMap::new(),
-        };
-    }
-    &mut cache.bytes
-}
+/// The outcome of the last action, shown under the header.
+type Status = Result<SharedString, SharedString>;
 
 pub struct Library {
     /// `None` until the first listing arrives.
     tiles: Option<Vec<Tile>>,
-    status: Option<SharedString>,
+    status: Option<Status>,
     /// The snip whose Delete was clicked once and awaits confirmation.
     confirming: Option<CloudSnip>,
     /// Replaced thumbnails to release from the GPU atlas on the next frame.
     released: Vec<Arc<RenderImage>>,
+    /// Listing and thumbnails; replacing it cancels the previous load.
+    loading: Task<()>,
 }
 
 struct Tile {
@@ -81,30 +61,41 @@ pub fn open(cx: &mut App) {
 /// Copies the newest cloud snip, from the tray. Failures open the Library to
 /// explain, since the tray has nowhere to show them.
 pub fn copy_latest(cx: &mut App) {
-    let Some(latest) = cloud::run(cx, |store| match store.latest(1)?.first() {
+    let Some(copied) = copy(cx, |store| match store.latest(1)?.first() {
         Some(snip) => store.image(snip).map(Some),
         None => Ok(None),
     }) else {
         return;
     };
     cx.spawn(async move |cx| {
-        let latest = latest.await;
-        cx.update(|cx| {
-            let failure = match latest {
-                Ok(Some(image)) => match crate::clipboard::write(&image, cx) {
-                    Ok(()) => return,
-                    Err(error) => format!("Could not copy the latest cloud snip: {error:#}"),
-                },
-                Ok(None) => "There are no cloud snips yet.".to_owned(),
-                Err(message) => format!("Could not copy the latest cloud snip: {message}"),
-            };
-            show(Some(failure.into()), cx);
-        });
+        let failure = match copied.await {
+            Ok(true) => return,
+            Ok(false) => "There are no cloud snips yet.".to_owned(),
+            Err(message) => format!("Could not copy the latest cloud snip: {message}"),
+        };
+        cx.update(|cx| show(Some(Err(failure.into())), cx));
     })
     .detach();
 }
 
-fn show(status: Option<SharedString>, cx: &mut App) {
+/// Fetches an image from the bucket and puts it on the clipboard. Resolves
+/// to `false` when `fetch` finds nothing to copy.
+fn copy(
+    cx: &mut App,
+    fetch: impl FnOnce(&dyn CloudStore) -> snip_cloud::Result<Option<RgbaImage>> + Send + 'static,
+) -> Option<Task<Result<bool, String>>> {
+    let fetched = cloud::run(cx, fetch)?;
+    Some(cx.spawn(async move |cx| {
+        let Some(image) = fetched.await? else {
+            return Ok(false);
+        };
+        cx.update(|cx| crate::clipboard::write(&image, cx))
+            .map(|()| true)
+            .map_err(|error| format!("{error:#}"))
+    }))
+}
+
+fn show(status: Option<Status>, cx: &mut App) {
     cx.activate(true);
     if let Some(handle) = cx.default_global::<LibraryWindow>().0 {
         let reopened = handle.update(cx, |library, window, cx| {
@@ -137,12 +128,13 @@ fn show(status: Option<SharedString>, cx: &mut App) {
                 false
             });
             cx.new(|cx| {
-                cx.observe_global::<Cloud>(|_, cx| cx.notify()).detach();
+                cx.observe_global::<cloud::Cloud>(|_, cx| cx.notify()).detach();
                 let mut library = Library {
                     tiles: None,
                     status,
                     confirming: None,
                     released: Vec::new(),
+                    loading: Task::ready(()),
                 };
                 library.reload(cx);
                 library
@@ -161,47 +153,53 @@ impl Library {
             return;
         };
         self.confirming = None;
-        cx.spawn(async move |this, cx| {
+        self.loading = cx.spawn(async move |this, cx| {
             let listed = listing.await;
-            let Ok(missing) = this.update(cx, |this, cx| this.listed(listed, cx)) else {
+            let Ok(needed) = this.update(cx, |this, cx| this.listed(listed, cx)) else {
                 return;
             };
-            // Interleave so the newest thumbnails arrive first.
-            for worker in 0..WORKERS {
-                let share: Vec<_> = missing.iter().skip(worker).step_by(WORKERS).cloned().collect();
-                let this = this.clone();
-                cx.spawn(async move |cx| {
-                    for snip in share {
-                        let fetch = cx.update(|cx| {
-                            let cached = thumbnails(cx).get(&snip).cloned();
-                            let fetching = snip.clone();
-                            cloud::run(cx, move |store| thumbnail(store, &fetching, cached))
-                        });
-                        let Some(fetch) = fetch else {
-                            return;
-                        };
-                        let fetched = fetch.await;
-                        if this
-                            .update(cx, |this, cx| this.thumbnail_arrived(snip, fetched, cx))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                })
-                .detach();
+            if needed.is_empty() {
+                return;
             }
-        })
-        .detach();
+            let (arrived, mut arrivals) = mpsc::unbounded();
+            let queue = Arc::new(Mutex::new(needed.into_iter()));
+            let workers = cx.update(|cx| {
+                (0..WORKERS)
+                    .filter_map(|_| {
+                        let (queue, arrived) = (queue.clone(), arrived.clone());
+                        cloud::run(cx, move |store| fetch_thumbnails(store, &queue, &arrived))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            drop(arrived);
+            while let Some((snip, bytes, image)) = arrivals.next().await {
+                if this
+                    .update(cx, |this, cx| this.thumbnail_arrived(snip, bytes, image, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            for worker in workers {
+                if let Err(message) = worker.await {
+                    this.update(cx, |this, cx| {
+                        this.status = Some(Err(format!("Could not load a thumbnail: {message}").into()));
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            }
+        });
     }
 
     /// Shows a listing, keeping thumbnails already on screen, and returns the
-    /// snips that still need one.
-    fn listed(&mut self, listed: Result<Vec<CloudSnip>, String>, cx: &mut Context<Self>) -> Vec<CloudSnip> {
+    /// snips that still need one with any bytes this connection cached.
+    fn listed(&mut self, listed: Result<Vec<CloudSnip>, String>, cx: &mut Context<Self>) -> Vec<Needed> {
         let snips = match listed {
             Ok(snips) => snips,
             Err(message) => {
-                self.status = Some(format!("Could not list cloud snips: {message}").into());
+                self.status = Some(Err(format!("Could not list cloud snips: {message}").into()));
                 cx.notify();
                 return Vec::new();
             }
@@ -223,53 +221,51 @@ impl Library {
             .collect();
         self.released
             .extend(previous.into_iter().filter_map(|tile| tile.thumbnail));
-        let missing = tiles
+        let cache = cloud::connection(cx).map(|connection| connection.thumbnails.borrow().clone());
+        let needed = tiles
             .iter()
             .filter(|tile| tile.thumbnail.is_none())
-            .map(|tile| tile.snip.clone())
+            .map(|tile| {
+                let cached = cache.as_ref().and_then(|cache| cache.get(&tile.snip).cloned());
+                (tile.snip.clone(), cached)
+            })
             .collect();
         self.tiles = Some(tiles);
         cx.notify();
-        missing
+        needed
     }
 
     fn thumbnail_arrived(
         &mut self,
         snip: CloudSnip,
-        fetched: Result<(Arc<Vec<u8>>, Arc<RenderImage>), String>,
+        bytes: Arc<Vec<u8>>,
+        image: Arc<RenderImage>,
         cx: &mut Context<Self>,
     ) {
-        match fetched {
-            Ok((bytes, image)) => {
-                thumbnails(cx).insert(snip.clone(), bytes);
-                match self.tiles.iter_mut().flatten().find(|tile| tile.snip == snip) {
-                    Some(tile) => self.released.extend(tile.thumbnail.replace(image)),
-                    None => self.released.push(image),
-                }
-            }
-            Err(message) => self.status = Some(format!("Could not load a thumbnail: {message}").into()),
+        if let Some(connection) = cloud::connection(cx) {
+            connection.thumbnails.borrow_mut().insert(snip.clone(), bytes);
+        }
+        match self.tiles.iter_mut().flatten().find(|tile| tile.snip == snip) {
+            Some(tile) => self.released.extend(tile.thumbnail.replace(image)),
+            None => self.released.push(image),
         }
         cx.notify();
     }
 
     fn copy(&mut self, snip: CloudSnip, label: SharedString, cx: &mut Context<Self>) {
-        let Some(image) = cloud::run(cx, move |store| store.image(&snip)) else {
+        let Some(copied) = copy(cx, move |store| store.image(&snip).map(Some)) else {
             return;
         };
         self.confirming = None;
-        self.status = Some("Copying…".into());
+        self.status = Some(Ok("Copying…".into()));
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let image = image.await;
+            let status = match copied.await {
+                Ok(_) => Ok(format!("Copied the snip from {label}").into()),
+                Err(message) => Err(format!("Copy failed: {message}").into()),
+            };
             this.update(cx, |this, cx| {
-                let status = match image {
-                    Ok(image) => match crate::clipboard::write(&image, cx) {
-                        Ok(()) => format!("Copied the snip from {label}"),
-                        Err(error) => format!("Copy failed: {error:#}"),
-                    },
-                    Err(message) => format!("Copy failed: {message}"),
-                };
-                this.status = Some(status.into());
+                this.status = Some(status);
                 cx.notify();
             })
             .ok();
@@ -287,22 +283,24 @@ impl Library {
             return;
         };
         self.confirming = None;
-        self.status = Some("Deleting…".into());
+        self.status = Some(Ok("Deleting…".into()));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let deleted = deleted.await;
             this.update(cx, |this, cx| {
                 this.status = Some(match deleted {
                     Ok(()) => {
-                        thumbnails(cx).remove(&snip);
+                        if let Some(connection) = cloud::connection(cx) {
+                            connection.thumbnails.borrow_mut().remove(&snip);
+                        }
                         if let Some(tiles) = &mut this.tiles
                             && let Some(index) = tiles.iter().position(|tile| tile.snip == snip)
                         {
                             this.released.extend(tiles.remove(index).thumbnail);
                         }
-                        "Deleted the snip".into()
+                        Ok("Deleted the snip".into())
                     }
-                    Err(message) => format!("Delete failed: {message}").into(),
+                    Err(message) => Err(format!("Delete failed: {message}").into()),
                 });
                 cx.notify();
             })
@@ -370,10 +368,7 @@ impl Render for Library {
         for image in self.released.drain(..) {
             window.drop_image(image).ok();
         }
-        let account = match &cx.global::<Cloud>().state {
-            State::Ready(_, account) => Some(account.name.clone()),
-            _ => None,
-        };
+        let account = cloud::connection(cx).map(|connection| connection.account.name.clone());
         let header = div()
             .flex()
             .items_center()
@@ -420,26 +415,39 @@ impl Render for Library {
             .text_color(rgb(ui::TEXT))
             .text_size(px(15.))
             .child(header)
-            .children(
-                self.status
-                    .clone()
-                    .map(|status| line(status).text_color(rgb(ui::SUCCESS))),
-            )
+            .children(self.status.clone().map(|status| match status {
+                Ok(text) => line(text).text_color(rgb(ui::SUCCESS)),
+                Err(text) => line(text).text_color(rgb(ui::ERROR)),
+            }))
             .child(body)
     }
 }
 
-fn thumbnail(
+/// A snip without a thumbnail on screen, with its cached bytes if any.
+type Needed = (CloudSnip, Option<Arc<Vec<u8>>>);
+/// A thumbnail ready to show, with its bytes for the cache.
+type Arrival = (CloudSnip, Arc<Vec<u8>>, Arc<RenderImage>);
+
+/// One of the Library's thumbnail workers: downloads and decodes snips from
+/// the shared queue, sending each as it is ready, until the queue is empty, a
+/// fetch fails, or the Library stops listening.
+fn fetch_thumbnails(
     store: &dyn CloudStore,
-    snip: &CloudSnip,
-    cached: Option<Arc<Vec<u8>>>,
-) -> snip_cloud::Result<(Arc<Vec<u8>>, Arc<RenderImage>)> {
-    let bytes = match cached {
-        Some(bytes) => bytes,
-        None => Arc::new(store.thumbnail(snip)?),
-    };
-    let image = crate::capture::to_render_image(&snip_cloud::decode(&bytes)?);
-    Ok((bytes, image))
+    queue: &Mutex<std::vec::IntoIter<Needed>>,
+    arrived: &mpsc::UnboundedSender<Arrival>,
+) -> snip_cloud::Result<()> {
+    while !arrived.is_closed() {
+        let Some((snip, cached)) = queue.lock().unwrap().next() else {
+            break;
+        };
+        let bytes = match cached {
+            Some(bytes) => bytes,
+            None => Arc::new(store.thumbnail(&snip)?),
+        };
+        let image = crate::capture::to_render_image(&snip_cloud::decode(&bytes)?);
+        arrived.unbounded_send((snip, bytes, image)).ok();
+    }
+    Ok(())
 }
 
 fn uploaded_label(uploaded: SystemTime) -> String {

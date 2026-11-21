@@ -1,9 +1,17 @@
 //! Cloud snips in the app: the sign-in state, the saved session, and the
-//! store that Copy to cloud and the Library use. See docs/adr/0002.
+//! bucket that Copy to cloud and the Library use. See docs/adr/0002.
+//!
+//! Background work finishes after the user may have moved on, so each result
+//! applies only while the state that started it is still current.
 
-use std::sync::{
-    Arc, LazyLock,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -47,38 +55,50 @@ pub trait Credentials: Send + Sync {
     fn clear(&self) -> Result<()>;
 }
 
+/// A signed-in bucket, and what this run has fetched from it.
+pub struct Connection {
+    pub store: Arc<dyn CloudStore>,
+    pub account: Account,
+    /// Encoded thumbnails already downloaded, dropped with the connection.
+    pub thumbnails: RefCell<HashMap<CloudSnip, Arc<Vec<u8>>>>,
+}
+
 pub enum State {
     SignedOut,
     SigningIn(Arc<AtomicBool>),
     ChoosingAccount(Arc<Session>, Vec<Account>),
-    /// Opening or creating the bucket.
-    Connecting,
+    /// Opening or creating the bucket with this session.
+    Connecting(Arc<Session>),
     R2NotEnabled(Arc<Session>, Account),
-    Ready(Arc<dyn CloudStore>, Account),
+    Ready(Rc<Connection>),
 }
 
 pub struct Cloud {
     credentials: Arc<dyn Credentials>,
-    pub state: State,
-    pub error: Option<String>,
+    state: State,
+    error: Option<String>,
 }
 
 impl Global for Cloud {}
 
 impl Cloud {
-    pub fn signed_out(credentials: Arc<dyn Credentials>) -> Self {
-        Self {
-            credentials,
-            state: State::SignedOut,
-            error: None,
-        }
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 }
 
 /// Restores a saved sign-in without touching the network, so cloud features
 /// are available offline and fail on use instead.
 pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
-    cx.set_global(Cloud::signed_out(credentials.clone()));
+    cx.set_global(Cloud {
+        credentials: credentials.clone(),
+        state: State::SignedOut,
+        error: None,
+    });
     let load = cx.background_executor().spawn({
         let credentials = credentials.clone();
         async move { credentials.load() }
@@ -87,6 +107,10 @@ pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
         let loaded = load.await;
         cx.update(|cx| {
             let cloud = cx.global_mut::<Cloud>();
+            // The user may have started signing in meanwhile.
+            if !matches!(cloud.state, State::SignedOut) {
+                return;
+            }
             match loaded {
                 Ok(Some((refresh_token, account))) => {
                     let session = Arc::new(Session::restore(
@@ -94,8 +118,7 @@ pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
                         refresh_token,
                         saver(credentials),
                     ));
-                    let store = Arc::new(Bucket::existing(session, &account.id));
-                    cloud.state = State::Ready(store, account);
+                    cloud.state = ready(Bucket::existing(session, &account.id), account);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -105,6 +128,14 @@ pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
         });
     })
     .detach();
+}
+
+fn ready(bucket: Bucket, account: Account) -> State {
+    State::Ready(Rc::new(Connection {
+        store: Arc::new(bucket),
+        account,
+        thumbnails: RefCell::default(),
+    }))
 }
 
 /// Saves each refresh token a session receives. A failed save only costs a
@@ -117,11 +148,20 @@ fn saver(credentials: Arc<dyn Credentials>) -> impl Fn(&str) + Send + Sync + 'st
     }
 }
 
-pub fn store(cx: &App) -> Option<Arc<dyn CloudStore>> {
+pub fn connection(cx: &App) -> Option<Rc<Connection>> {
     match &cx.try_global::<Cloud>()?.state {
-        State::Ready(store, _) => Some(store.clone()),
+        State::Ready(connection) => Some(connection.clone()),
         _ => None,
     }
+}
+
+pub fn store(cx: &App) -> Option<Arc<dyn CloudStore>> {
+    connection(cx).map(|connection| connection.store.clone())
+}
+
+/// Shows a problem in Settings' cloud section.
+pub fn report(message: String, cx: &mut App) {
+    cx.global_mut::<Cloud>().error = Some(message);
 }
 
 pub fn sign_in(cx: &mut App) {
@@ -133,25 +173,39 @@ pub fn sign_in(cx: &mut App) {
     cloud.state = State::SigningIn(cancel.clone());
     cloud.error = None;
     let credentials = cloud.credentials.clone();
-    let signed_in = cx.background_executor().spawn(async move {
-        let config = Config::cloudflare();
-        let tokens = snip_cloud::sign_in(&config, &cancel, |url| open::that(url))?;
-        let session = Arc::new(Session::new(config, tokens, saver(credentials)));
-        let accounts = session.accounts()?;
-        Ok::<_, snip_cloud::Error>((session, accounts))
+    let signed_in = cx.background_executor().spawn({
+        let cancel = cancel.clone();
+        async move {
+            let config = Config::cloudflare();
+            let tokens = snip_cloud::sign_in(&config, &cancel, |url| open::that(url))?;
+            let session = Arc::new(Session::new(config, tokens, saver(credentials)));
+            let accounts = session.accounts()?;
+            Ok::<_, snip_cloud::Error>((session, accounts))
+        }
     });
     cx.spawn(async move |cx| {
         let signed_in = signed_in.await;
-        cx.update(|cx| match signed_in {
-            Ok((session, mut accounts)) if accounts.len() == 1 => connect(session, accounts.remove(0), cx),
-            Ok((_, accounts)) if accounts.is_empty() => {
-                fail("This Cloudflare sign-in can't reach any accounts.".into(), cx)
+        cx.update(|cx| {
+            let current = matches!(
+                &cx.global::<Cloud>().state,
+                State::SigningIn(started) if Arc::ptr_eq(started, &cancel)
+            );
+            if !current {
+                return;
             }
-            Ok((session, accounts)) => {
-                cx.global_mut::<Cloud>().state = State::ChoosingAccount(session, accounts)
+            match signed_in {
+                Ok((session, mut accounts)) if accounts.len() == 1 => {
+                    connect(session, accounts.remove(0), cx)
+                }
+                Ok((_, accounts)) if accounts.is_empty() => {
+                    fail("This Cloudflare sign-in can't reach any accounts.".into(), cx)
+                }
+                Ok((session, accounts)) => {
+                    cx.global_mut::<Cloud>().state = State::ChoosingAccount(session, accounts)
+                }
+                Err(snip_cloud::Error::Canceled) => cx.global_mut::<Cloud>().state = State::SignedOut,
+                Err(error) => fail(format!("Could not sign in: {error}"), cx),
             }
-            Err(snip_cloud::Error::Canceled) => cx.global_mut::<Cloud>().state = State::SignedOut,
-            Err(error) => fail(format!("Could not sign in: {error}"), cx),
         });
     })
     .detach();
@@ -164,8 +218,7 @@ pub fn cancel_sign_in(cx: &mut App) {
 }
 
 pub fn choose_account(account: Account, cx: &mut App) {
-    let cloud = cx.global_mut::<Cloud>();
-    let State::ChoosingAccount(session, _) = &cloud.state else {
+    let State::ChoosingAccount(session, _) = &cx.global::<Cloud>().state else {
         return;
     };
     let session = session.clone();
@@ -183,7 +236,7 @@ pub fn retry(cx: &mut App) {
 
 fn connect(session: Arc<Session>, account: Account, cx: &mut App) {
     let cloud = cx.global_mut::<Cloud>();
-    cloud.state = State::Connecting;
+    cloud.state = State::Connecting(session.clone());
     cloud.error = None;
     let credentials = cloud.credentials.clone();
     let opened = cx.background_executor().spawn({
@@ -198,12 +251,21 @@ fn connect(session: Arc<Session>, account: Account, cx: &mut App) {
     });
     cx.spawn(async move |cx| {
         let opened = opened.await;
-        cx.update(|cx| match opened {
-            Ok(bucket) => cx.global_mut::<Cloud>().state = State::Ready(Arc::new(bucket), account),
-            Err(snip_cloud::Error::R2NotEnabled) => {
-                cx.global_mut::<Cloud>().state = State::R2NotEnabled(session, account)
+        cx.update(|cx| {
+            let current = matches!(
+                &cx.global::<Cloud>().state,
+                State::Connecting(started) if Arc::ptr_eq(started, &session)
+            );
+            if !current {
+                return;
             }
-            Err(error) => fail(format!("Could not set up the snip-snip bucket: {error}"), cx),
+            match opened {
+                Ok(bucket) => cx.global_mut::<Cloud>().state = ready(bucket, account),
+                Err(snip_cloud::Error::R2NotEnabled) => {
+                    cx.global_mut::<Cloud>().state = State::R2NotEnabled(session, account)
+                }
+                Err(error) => fail(format!("Could not set up the snip-snip bucket: {error}"), cx),
+            }
         });
     })
     .detach();
@@ -223,37 +285,42 @@ pub fn sign_out(cx: &mut App) {
 
 fn fail(message: String, cx: &mut App) {
     sign_out(cx);
-    cx.global_mut::<Cloud>().error = Some(message);
+    report(message, cx);
 }
 
 /// Runs `work` against the signed-in bucket off the UI thread, or returns
-/// `None` when signed out. A failure comes back described for a status line;
-/// an ended session also signs out, so cloud features disappear until the user
-/// signs in again.
+/// `None` when signed out. A failure comes back described for a status line.
+/// An ended session also signs out, unless the user has already moved on to
+/// another one, so cloud features disappear until they sign in again.
 pub fn run<T: Send + 'static>(
     cx: &mut App,
     work: impl FnOnce(&dyn CloudStore) -> snip_cloud::Result<T> + Send + 'static,
 ) -> Option<Task<Result<T, String>>> {
     let store = store(cx)?;
-    let worked = cx.background_executor().spawn(async move { work(&*store) });
+    let worked = cx.background_executor().spawn({
+        let store = store.clone();
+        async move { work(&*store) }
+    });
     Some(cx.spawn(async move |cx| {
         let worked = worked.await;
-        cx.update(|cx| worked.map_err(|error| describe(error, cx)))
+        cx.update(|cx| {
+            worked.map_err(|error| match error {
+                snip_cloud::Error::SignedOut => {
+                    let message = "Your Cloudflare session ended. Sign in again in Settings.".to_owned();
+                    if self::store(cx).is_some_and(|current| Arc::ptr_eq(&current, &store)) {
+                        fail(message.clone(), cx);
+                    }
+                    message
+                }
+                error => error.to_string(),
+            })
+        })
     }))
 }
 
-fn describe(error: snip_cloud::Error, cx: &mut App) -> String {
-    match error {
-        snip_cloud::Error::SignedOut => {
-            let message = "Your Cloudflare session ended. Sign in again in Settings.".to_owned();
-            fail(message.clone(), cx);
-            message
-        }
-        error => error.to_string(),
-    }
-}
-
 /// The OS credential store: Windows Credential Manager or the macOS Keychain.
+/// It holds two entries under the `snip-snip` service: the refresh token, and
+/// the chosen account as its id and name separated by a newline.
 pub struct Keychain;
 
 const SERVICE: &str = "snip-snip";
@@ -339,7 +406,11 @@ pub mod testing {
         };
         Cloud {
             credentials: Arc::new(MemoryCredentials::signed_in(account.clone())),
-            state: State::Ready(store, account),
+            state: State::Ready(Rc::new(Connection {
+                store,
+                account,
+                thumbnails: RefCell::default(),
+            })),
             error: None,
         }
     }

@@ -95,10 +95,7 @@ pub fn sign_in(
         ("client_id", config.client_id.as_str()),
         ("code_verifier", verifier.as_str()),
     ]))?;
-    if !reply.succeeded() {
-        return Err(reply.error("exchanging the sign-in code"));
-    }
-    tokens(&reply)
+    tokens(&reply.body("exchanging the sign-in code")?)
 }
 
 /// Answers one browser request. `None` means keep waiting: another path, or a
@@ -169,8 +166,8 @@ fn respond(stream: &mut TcpStream, status: &str, message: &str) -> std::io::Resu
     )
 }
 
-fn tokens(reply: &Reply) -> Result<Tokens> {
-    let json: Value = serde_json::from_slice(&reply.body).context("reading Cloudflare's tokens")?;
+fn tokens(body: &[u8]) -> Result<Tokens> {
+    let json: Value = serde_json::from_slice(body).context("reading Cloudflare's tokens")?;
     let field = |name: &str| json[name].as_str().map(str::to_owned);
     Ok(Tokens {
         access: field("access_token").context("Cloudflare returned no access token")?,
@@ -307,10 +304,7 @@ impl Session {
         if matches!(reply.status, 400 | 401) {
             return Err(Error::SignedOut);
         }
-        if !reply.succeeded() {
-            return Err(reply.error("refreshing the Cloudflare session"));
-        }
-        let tokens = tokens(&reply)?;
+        let tokens = tokens(&reply.body("refreshing the Cloudflare session")?)?;
         (self.on_refresh)(&tokens.refresh);
         current.refresh = tokens.refresh;
         current.access = Some((tokens.access.clone(), Instant::now() + tokens.expires_in));
