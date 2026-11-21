@@ -1,4 +1,4 @@
-//! Clipboard and PNG export.
+//! Clipboard, PNG, and cloud export.
 
 use std::{
     borrow::Cow,
@@ -139,6 +139,43 @@ impl Editor {
             Err(error) => format!("Copy failed: {error:#}").into(),
         };
         cx.notify();
+    }
+
+    /// Copies like Copy & Close and also uploads the snip, closing once it
+    /// lands. A failed upload keeps the editor open so the snip isn't lost.
+    pub(super) fn copy_to_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(store) = crate::cloud::store(cx) else {
+            return;
+        };
+        if self.uploading {
+            return;
+        }
+        let image = self.export(window);
+        let environment = cx.default_global::<ExportServices>().0.clone();
+        if let Err(error) = environment.write_clipboard(image.clone()) {
+            self.status = format!("Copy failed: {error:#}").into();
+            return cx.notify();
+        }
+        self.uploading = true;
+        self.status = "Uploading to the cloud…".into();
+        cx.notify();
+        let upload = cx
+            .background_executor()
+            .spawn(async move { store.upload(&image) });
+        cx.spawn_in(window, async move |this, cx| {
+            let uploaded = upload.await;
+            this.update_in(cx, |this, window, cx| match uploaded {
+                Ok(_) => window.remove_window(),
+                Err(error) => {
+                    this.uploading = false;
+                    this.status =
+                        format!("Copy to cloud failed: {}", crate::cloud::describe(error, cx)).into();
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {

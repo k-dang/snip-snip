@@ -1,6 +1,6 @@
 //! Drive Settings and shell events through the agreed GPUI / native-effect seam.
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use anyhow::{Result, bail};
 use futures::channel::mpsc;
@@ -8,6 +8,7 @@ use global_hotkey::hotkey::HotKey;
 use gpui::{App, Modifiers, TestAppContext, VisualTestContext};
 
 use super::{ShellEvent, ShellPlatform};
+use crate::cloud::{Credentials, testing::MemoryCredentials};
 
 #[derive(Default)]
 struct NativeState {
@@ -17,6 +18,7 @@ struct NativeState {
     released: bool,
     recorded: Option<HotKey>,
     fail_release: Option<HotKey>,
+    credentials: Arc<MemoryCredentials>,
 }
 
 struct TestPlatform(Rc<RefCell<NativeState>>);
@@ -50,6 +52,9 @@ impl ShellPlatform for TestPlatform {
     }
     fn capture(&mut self, _: &mut App) {
         self.0.borrow_mut().captures += 1;
+    }
+    fn credentials(&self) -> Arc<dyn Credentials> {
+        self.0.borrow().credentials.clone()
     }
 }
 
@@ -479,4 +484,35 @@ fn applying_defers_disk_work_and_finishes_after_settings_closes(cx: &mut TestApp
     let window = view.cx.update(|cx| cx.windows()[0]);
     let mut reopened = VisualTestContext::from_window(window, &view.cx);
     assert!(reopened.debug_bounds(APPLIED_NEW).is_some());
+}
+
+#[gpui::test]
+fn signing_out_forgets_the_saved_cloud_session(cx: &mut TestAppContext) {
+    let folder = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(MemoryCredentials::signed_in(snip_cloud::Account {
+        id: "account-1".into(),
+        name: "Kevin's Account".into(),
+    }));
+    let native = Rc::new(RefCell::new(NativeState {
+        credentials: credentials.clone(),
+        ..Default::default()
+    }));
+    let (tx, rx) = mpsc::unbounded();
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native)),
+            folder.path().join("shortcut"),
+            rx,
+            cx,
+        )
+    });
+    tx.unbounded_send(ShellEvent::Settings).unwrap();
+    cx.run_until_parked();
+    let window = cx.update(|cx| cx.windows()[0]);
+    let mut view = VisualTestContext::from_window(window, cx);
+    assert!(view.debug_bounds("Signed in to Kevin's Account").is_some());
+    click(&mut view, "Sign out");
+    view.run_until_parked();
+    assert!(view.debug_bounds("Sign in with Cloudflare").is_some());
+    assert!(credentials.load().unwrap().is_none());
 }

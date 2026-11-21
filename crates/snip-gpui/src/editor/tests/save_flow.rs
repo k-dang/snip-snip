@@ -14,14 +14,14 @@ use gpui::{AsyncWindowContext, Task};
 use super::super::export::{ExportEnvironment, ExportServices, window_save_picker};
 use super::*;
 
-struct TestExports {
+pub(super) struct TestExports {
     root: tempfile::TempDir,
     pictures: RefCell<Option<PathBuf>>,
     home: RefCell<Option<PathBuf>>,
     time: RefCell<Result<DateTime<FixedOffset>, String>>,
     suggestions: RefCell<Vec<(PathBuf, String)>>,
     picker_windows: RefCell<Vec<Option<gpui::AnyWindowHandle>>>,
-    clipboard: RefCell<Option<RgbaImage>>,
+    pub(super) clipboard: RefCell<Option<RgbaImage>>,
     clipboard_error: Cell<bool>,
     picker_error: Cell<bool>,
 }
@@ -44,7 +44,7 @@ impl TestExports {
         })
     }
 
-    fn configure(cx: &mut TestAppContext) -> Rc<Self> {
+    pub(super) fn configure(cx: &mut TestAppContext) -> Rc<Self> {
         let effects = Self::new();
         cx.update(|cx| cx.set_global(ExportServices(effects.clone())));
         effects

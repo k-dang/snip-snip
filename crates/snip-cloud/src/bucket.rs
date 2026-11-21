@@ -27,7 +27,8 @@ pub struct CloudSnip {
 }
 
 impl CloudSnip {
-    fn new(uploaded: SystemTime) -> Self {
+    /// A new snip id for something uploaded at `uploaded`.
+    pub fn new(uploaded: SystemTime) -> Self {
         let millis = uploaded
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -69,6 +70,12 @@ pub struct Bucket {
 }
 
 impl Bucket {
+    /// The account's `snip-snip` bucket, set up earlier by [`Bucket::open`].
+    pub fn existing(session: Arc<Session>, account_id: &str) -> Self {
+        let url = format!("{}/accounts/{account_id}/r2/buckets/{BUCKET}", session.api_url());
+        Self { session, url }
+    }
+
     /// Opens the account's `snip-snip` bucket, creating it on first use.
     pub fn open(session: Arc<Session>, account_id: &str) -> Result<Self> {
         let buckets = format!("{}/accounts/{account_id}/r2/buckets", session.api_url());

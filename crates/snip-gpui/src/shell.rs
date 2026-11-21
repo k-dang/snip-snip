@@ -4,6 +4,7 @@ use std::{
     fs,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context as _, Result};
@@ -11,6 +12,8 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use global_hotkey::hotkey::HotKey;
 use gpui::{App, BorrowAppContext, Global, WindowHandle};
+
+use crate::cloud::{self, Credentials};
 
 mod native;
 mod settings;
@@ -33,6 +36,8 @@ pub trait ShellPlatform {
     fn unregister(&mut self, shortcut: HotKey) -> Result<()>;
     fn capture(&mut self, cx: &mut App);
     fn dismiss_menu(&mut self) -> Result<()>;
+    /// Where the cloud session is saved.
+    fn credentials(&self) -> Arc<dyn Credentials>;
 }
 
 pub struct Shell {
@@ -96,6 +101,7 @@ pub fn install(
         }
     };
     let show_error = error.is_some();
+    cloud::install(platform.credentials(), cx);
     cx.set_global(Shell {
         platform,
         path,

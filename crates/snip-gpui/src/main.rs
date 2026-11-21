@@ -3,6 +3,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod capture;
+mod cloud;
 mod drag;
 mod editor;
 mod icon;

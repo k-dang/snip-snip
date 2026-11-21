@@ -1,10 +1,11 @@
 use global_hotkey::hotkey::HotKey;
 use gpui::{
-    App, Bounds, Context, FocusHandle, KeyDownEvent, ModifiersChangedEvent, Render, SharedString,
+    App, Bounds, Context, ElementId, FocusHandle, KeyDownEvent, ModifiersChangedEvent, Render, SharedString,
     TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 use super::{Shell, shortcut};
+use crate::cloud::{self, Cloud, State};
 
 pub struct Settings {
     focus: FocusHandle,
@@ -28,7 +29,7 @@ pub fn open(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(480.), px(320.)), cx);
+    let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -36,7 +37,7 @@ pub fn open(cx: &mut App) {
                 title: Some("snip-snip Settings".into()),
                 ..Default::default()
             }),
-            window_min_size: Some(size(px(440.), px(300.))),
+            window_min_size: Some(size(px(440.), px(420.))),
             ..Default::default()
         },
         |window, cx| {
@@ -60,6 +61,7 @@ pub fn open(cx: &mut App) {
                     this.cancel(cx)
                 })
                 .detach();
+                cx.observe_global::<Cloud>(|_, cx| cx.notify()).detach();
                 cx.on_release(|_, cx| {
                     if cx.has_global::<Shell>() {
                         cx.global_mut::<Shell>().recording = false;
@@ -309,7 +311,97 @@ impl Render for Settings {
                     .child(SharedString::from(message))
             }))
             .children(status.map(|status| div().text_color(rgb(0xa8d9c0)).child(line(status))))
+            .child(cloud_section(cx))
     }
+}
+
+fn cloud_section(cx: &App) -> impl IntoElement {
+    let cloud = cx.global::<Cloud>();
+    let section = div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .mt_3()
+        .child(div().text_size(px(20.)).child("Cloud snips"));
+    let section = match &cloud.state {
+        State::SignedOut => section
+            .child(line(
+                "Copy snips between your machines through an R2 bucket in your Cloudflare account.".into(),
+            ))
+            .child(row().child(button("cloud-sign-in", "Sign in with Cloudflare", cloud::sign_in))),
+        State::SigningIn(_) => section
+            .child(line("Finish signing in in your browser.".into()))
+            .child(row().child(button("cloud-cancel", "Cancel", cloud::cancel_sign_in))),
+        State::ChoosingAccount(_, accounts) => section
+            .child(line(
+                "Choose the Cloudflare account that holds your cloud snips:".into(),
+            ))
+            .child(row().flex_wrap().children(accounts.iter().map(|account| {
+                let chosen = account.clone();
+                button(
+                    format!("cloud-account-{}", account.id),
+                    account.name.clone(),
+                    move |cx| cloud::choose_account(chosen.clone(), cx),
+                )
+            }))),
+        State::Connecting => section.child(line("Setting up the snip-snip bucket…".into())),
+        State::R2NotEnabled(_, account) => section
+            .child(line(format!(
+                "R2 isn't enabled on {}. Enable it in the Cloudflare dashboard, then retry.",
+                account.name
+            )))
+            .child(
+                row()
+                    .child(button("cloud-open-r2", "Open R2 in Cloudflare", |cx| {
+                        if let Some(url) = cloud::r2_dashboard(cx)
+                            && let Err(error) = open::that(url)
+                        {
+                            cx.global_mut::<Cloud>().error =
+                                Some(format!("Could not open the browser: {error}"));
+                        }
+                    }))
+                    .child(button("cloud-retry", "Retry", cloud::retry))
+                    .child(button("cloud-sign-out", "Sign out", cloud::sign_out)),
+            ),
+        State::Ready(_, account) => section
+            .child(line(format!("Signed in to {}", account.name)))
+            .child(row().child(button("cloud-sign-out", "Sign out", cloud::sign_out))),
+    };
+    section.children(cloud.error.clone().map(|message| {
+        div()
+            .debug_selector({
+                let message = message.clone();
+                move || message
+            })
+            .text_color(rgb(0xffb8a8))
+            .child(SharedString::from(message))
+    }))
+}
+
+fn row() -> gpui::Div {
+    div().flex().gap_3()
+}
+
+fn button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    action: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    let label = label.into();
+    div()
+        .id(ElementId::Name(id.into()))
+        .debug_selector({
+            let label = label.clone();
+            move || label.to_string()
+        })
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0x58616e))
+        .cursor_pointer()
+        .child(label)
+        .on_click(move |_, _, cx| action(cx))
 }
 
 pub fn show_startup_error(message: String, cx: &mut App) {
