@@ -376,7 +376,7 @@ pub(super) fn apply(candidate: HotKey, cx: &mut App) -> Result<()> {
                 shell.settings
             });
             if let Some(window) = window {
-                window.update(cx, |settings, _, cx| { if succeeded { settings.applied(); } cx.notify(); }).ok();
+                window.update(cx, |settings, window, cx| { if succeeded { settings.applied(window, cx); } cx.notify(); }).ok();
             }
         });
     }).detach();

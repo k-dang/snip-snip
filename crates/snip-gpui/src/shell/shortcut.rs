@@ -36,6 +36,10 @@ pub fn record(key: &Keystroke) -> Result<HotKey> {
 }
 
 pub fn label(shortcut: HotKey) -> String {
+    keys(shortcut).join("+")
+}
+
+pub fn keys(shortcut: HotKey) -> Vec<String> {
     let mut parts = Vec::new();
     for (modifier, name) in [
         (Modifiers::CONTROL, "Ctrl"),
@@ -68,5 +72,5 @@ pub fn label(shortcut: HotKey) -> String {
             .unwrap_or(&key)
             .to_owned(),
     );
-    parts.join("+")
+    parts
 }
