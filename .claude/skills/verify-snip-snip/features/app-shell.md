@@ -14,9 +14,9 @@ exits the app. Closing an ordinary window keeps the shell running.
 
 ## How to get to it (user POV)
 
-Open the snip-snip tray/menu-bar icon. Choose Settings, Record shortcut, press
-a chord, and Apply. Escape cancels recording; Tab and Enter operate the two
-controls. Close Settings and capture with the new chord or the menu.
+Open the snip-snip tray/menu-bar icon. Choose Settings, Change, press
+a chord, and Apply. Escape cancels recording and Cancel drops a
+proposed chord; Tab and Enter operate Change and Apply. Close Settings and capture with the new chord or the menu.
 
 ## Driving it with snipctl
 

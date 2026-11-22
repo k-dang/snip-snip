@@ -87,7 +87,7 @@ fn recording_uses_the_physical_key_returned_by_the_platform(cx: &mut TestAppCont
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     // An alternate layout reports A for the physical U.S. Q position.
     view.simulate_keystrokes("ctrl-alt-a");
     let proposed = if cfg!(target_os = "macos") {
@@ -130,7 +130,7 @@ fn a_release_failure_restores_the_original_settings_and_working_chord(cx: &mut T
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     view.run_until_parked();
@@ -162,7 +162,7 @@ fn unreadable_but_replaceable_settings_can_be_repaired_through_apply(cx: &mut Te
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     view.run_until_parked();
@@ -230,10 +230,48 @@ fn recording_a_shortcut_displays_it_before_apply(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     assert!(view.debug_bounds(PROPOSED_NEW).is_some());
     assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
+}
+
+#[gpui::test]
+fn cancel_drops_the_proposed_shortcut_and_keeps_the_applied_one(cx: &mut TestAppContext) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("shortcut");
+    let native = Rc::new(RefCell::new(NativeState::default()));
+    let (tx, rx) = mpsc::unbounded();
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
+    tx.unbounded_send(ShellEvent::Settings).unwrap();
+    cx.run_until_parked();
+    let window = cx.update(|cx| cx.windows()[0]);
+    let mut view = VisualTestContext::from_window(window, cx);
+    click(&mut view, "Change");
+    view.simulate_keystrokes("ctrl-alt-k");
+    click(&mut view, "Cancel");
+    assert!(view.debug_bounds(PROPOSED_NEW).is_none());
+    assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
+    assert!(!path.exists());
+    assert_eq!(
+        native.borrow().registered,
+        HashSet::from(["alt+shift+s".parse().unwrap()])
+    );
+    view.simulate_keystrokes("enter");
+    assert!(view.debug_bounds("Press a shortcut. Escape cancels.").is_some());
+    // Cancel while recording, before any chord.
+    click(&mut view, "Cancel");
+    assert!(view.debug_bounds("Press a shortcut. Escape cancels.").is_none());
+    view.simulate_keystrokes("enter");
+    assert!(view.debug_bounds("Press a shortcut. Escape cancels.").is_some());
 }
 
 #[gpui::test]
@@ -255,7 +293,7 @@ fn applying_replaces_the_shortcut_and_remembers_it_on_restart(cx: &mut TestAppCo
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     assert!(view.debug_bounds(APPLIED_NEW).is_some());
@@ -325,7 +363,7 @@ fn startup_conflict_keeps_menu_capture_and_settings_available(cx: &mut TestAppCo
     view.executor().advance_clock(std::time::Duration::from_secs(1));
     view.run_until_parked();
     assert_eq!(native.borrow().captures, 1);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     assert!(view.debug_bounds(APPLIED_NEW).is_some());
@@ -363,7 +401,7 @@ fn recording_validates_cancels_and_accepts_the_registered_chord_without_capture(
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_modifiers_change(Modifiers {
         control: true,
         shift: true,
@@ -386,7 +424,7 @@ fn recording_validates_cancels_and_accepts_the_registered_chord_without_capture(
     view.simulate_keystrokes("shift-s");
     assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
     view.simulate_keystrokes("escape");
-    assert!(view.debug_bounds("Press a shortcut; Escape cancels").is_none());
+    assert!(view.debug_bounds("Press a shortcut. Escape cancels.").is_none());
     view.simulate_keystrokes("enter");
     tx.unbounded_send(ShellEvent::Hotkey {
         id: "alt+shift+s".parse::<HotKey>().unwrap().id(),
@@ -424,7 +462,7 @@ fn a_conflicting_replacement_preserves_the_applied_shortcut_and_saved_value(cx: 
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     assert!(view.debug_bounds("Could not apply shortcut: registering the proposed shortcut; choose an available chord: shortcut is in use").is_some());
@@ -453,7 +491,7 @@ fn malformed_settings_are_preserved_until_the_user_applies_a_shortcut(cx: &mut T
     let mut view = VisualTestContext::from_window(window, cx);
     assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "shift+s");
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     tx.unbounded_send(ShellEvent::Hotkey {
         id: "alt+shift+s".parse::<HotKey>().unwrap().id(),
         pressed: true,
@@ -485,7 +523,7 @@ fn an_unwritable_settings_destination_does_not_replace_the_working_shortcut(cx: 
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
     std::fs::create_dir(&path).unwrap();
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     click(&mut view, "Apply");
     assert!(view.debug_bounds(APPLIED_DEFAULT).is_some());
@@ -522,7 +560,7 @@ fn applying_defers_disk_work_and_finishes_after_settings_closes(cx: &mut TestApp
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
-    click(&mut view, "Record shortcut");
+    click(&mut view, "Change");
     view.simulate_keystrokes("ctrl-alt-k");
     view.simulate_keystrokes("tab");
     view.cx
