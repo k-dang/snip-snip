@@ -815,6 +815,7 @@ fn stationary_shift_changes_during_resize_still_commit_as_one_edit(cx: &mut Test
     );
 }
 
+mod cloud;
 mod crop;
 mod save_flow;
 mod text;

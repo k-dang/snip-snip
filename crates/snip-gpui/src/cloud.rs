@@ -1,0 +1,532 @@
+//! Cloud snips in the app: the sign-in state, the saved session, and the
+//! bucket that Copy to cloud and the Library use. See docs/adr/0002.
+//!
+//! Background work finishes after the user may have moved on, so each result
+//! applies only while the state that started it is still current.
+
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use anyhow::{Context as _, Result, anyhow};
+use gpui::{App, Global, Task};
+use snip_cloud::{Account, Bucket, CloudSnip, Config, Session};
+use snip_core::RgbaImage;
+
+/// Bucket operations, substituted in tests. Calls block.
+pub trait CloudStore: Send + Sync {
+    fn upload(&self, image: &RgbaImage) -> snip_cloud::Result<CloudSnip>;
+    fn latest(&self, limit: usize) -> snip_cloud::Result<Vec<CloudSnip>>;
+    fn image(&self, snip: &CloudSnip) -> snip_cloud::Result<RgbaImage>;
+    fn thumbnail(&self, snip: &CloudSnip) -> snip_cloud::Result<Vec<u8>>;
+    fn delete(&self, snip: &CloudSnip) -> snip_cloud::Result<()>;
+}
+
+impl CloudStore for Bucket {
+    fn upload(&self, image: &RgbaImage) -> snip_cloud::Result<CloudSnip> {
+        Bucket::upload(self, image)
+    }
+    fn latest(&self, limit: usize) -> snip_cloud::Result<Vec<CloudSnip>> {
+        Bucket::latest(self, limit)
+    }
+    fn image(&self, snip: &CloudSnip) -> snip_cloud::Result<RgbaImage> {
+        Bucket::image(self, snip)
+    }
+    fn thumbnail(&self, snip: &CloudSnip) -> snip_cloud::Result<Vec<u8>> {
+        Bucket::thumbnail(self, snip)
+    }
+    fn delete(&self, snip: &CloudSnip) -> snip_cloud::Result<()> {
+        Bucket::delete(self, snip)
+    }
+}
+
+/// Where the session and chosen account are kept, substituted in tests.
+pub trait Credentials: Send + Sync {
+    /// The saved refresh token and account, if sign-in finished.
+    fn load(&self) -> Result<Option<(String, Account)>>;
+    fn save_session(&self, refresh_token: &str) -> Result<()>;
+    fn save_account(&self, account: &Account) -> Result<()>;
+    fn clear(&self) -> Result<()>;
+}
+
+/// A signed-in bucket, and what this run has fetched from it.
+pub struct Connection {
+    pub store: Arc<dyn CloudStore>,
+    pub account: Account,
+    /// Encoded thumbnails already downloaded, dropped with the connection.
+    pub thumbnails: RefCell<HashMap<CloudSnip, Arc<Vec<u8>>>>,
+}
+
+pub enum State {
+    SignedOut,
+    SigningIn(Arc<AtomicBool>),
+    ChoosingAccount(Arc<Session>, Vec<Account>),
+    /// Opening or creating the bucket with this session.
+    Connecting(Arc<Session>),
+    R2NotEnabled(Arc<Session>, Account),
+    Ready(Rc<Connection>),
+}
+
+pub struct Cloud {
+    credentials: Arc<dyn Credentials>,
+    state: State,
+    error: Option<String>,
+    /// Cleared when the current session is signed out or replaced, so its
+    /// in-flight refreshes stop saving tokens over the next session's.
+    live: Arc<AtomicBool>,
+}
+
+impl Cloud {
+    /// Retires the current session's token saving and starts a new one.
+    fn next_session(&mut self) -> Arc<AtomicBool> {
+        self.live.store(false, Ordering::Relaxed);
+        self.live = Arc::new(AtomicBool::new(true));
+        self.live.clone()
+    }
+}
+
+impl Global for Cloud {}
+
+impl Cloud {
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+}
+
+/// Restores a saved sign-in without touching the network, so cloud features
+/// are available offline and fail on use instead.
+pub fn install(credentials: Arc<dyn Credentials>, cx: &mut App) {
+    cx.set_global(Cloud {
+        credentials: credentials.clone(),
+        state: State::SignedOut,
+        error: None,
+        live: Arc::new(AtomicBool::new(false)),
+    });
+    let load = cx.background_executor().spawn({
+        let credentials = credentials.clone();
+        async move { credentials.load() }
+    });
+    cx.spawn(async move |cx| {
+        let loaded = load.await;
+        cx.update(|cx| {
+            let cloud = cx.global_mut::<Cloud>();
+            // The user may have started signing in meanwhile.
+            if !matches!(cloud.state, State::SignedOut) {
+                return;
+            }
+            match loaded {
+                Ok(Some((refresh_token, account))) => {
+                    let live = cloud.next_session();
+                    let session = Arc::new(Session::restore(
+                        Config::cloudflare(),
+                        refresh_token,
+                        saver(credentials, live),
+                    ));
+                    cloud.state = ready(Bucket::existing(session, &account.id), account);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    cloud.error = Some(format!("Could not read the saved Cloudflare session: {error:#}"))
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+fn ready(bucket: Bucket, account: Account) -> State {
+    State::Ready(Rc::new(Connection {
+        store: Arc::new(bucket),
+        account,
+        thumbnails: RefCell::default(),
+    }))
+}
+
+/// Saves each rotated refresh token while the session is `live`. A failed
+/// save only costs a sign-in on the next launch, so it is logged rather than
+/// surfaced.
+fn saver(credentials: Arc<dyn Credentials>, live: Arc<AtomicBool>) -> impl Fn(&str) + Send + Sync + 'static {
+    move |token| {
+        if live.load(Ordering::Relaxed)
+            && let Err(error) = credentials.save_session(token)
+        {
+            eprintln!("cloud: could not save the session: {error:#}");
+        }
+    }
+}
+
+pub fn connection(cx: &App) -> Option<Rc<Connection>> {
+    match &cx.try_global::<Cloud>()?.state {
+        State::Ready(connection) => Some(connection.clone()),
+        _ => None,
+    }
+}
+
+pub fn store(cx: &App) -> Option<Arc<dyn CloudStore>> {
+    connection(cx).map(|connection| connection.store.clone())
+}
+
+/// Shows a problem in Settings' cloud section.
+pub fn report(message: String, cx: &mut App) {
+    cx.global_mut::<Cloud>().error = Some(message);
+}
+
+pub fn sign_in(cx: &mut App) {
+    let cloud = cx.global_mut::<Cloud>();
+    if !matches!(cloud.state, State::SignedOut) {
+        return;
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    cloud.state = State::SigningIn(cancel.clone());
+    cloud.error = None;
+    let live = cloud.next_session();
+    let credentials = cloud.credentials.clone();
+    let signed_in = cx.background_executor().spawn({
+        let cancel = cancel.clone();
+        async move {
+            let config = Config::cloudflare();
+            let tokens = snip_cloud::sign_in(&config, &cancel, |url| open::that(url))?;
+            if !live.load(Ordering::Relaxed) {
+                return Err(snip_cloud::Error::Canceled);
+            }
+            credentials
+                .save_session(tokens.refresh_token())
+                .context("saving the Cloudflare session")?;
+            let session = Arc::new(Session::new(config, tokens, saver(credentials, live)));
+            let accounts = session.accounts()?;
+            Ok::<_, snip_cloud::Error>((session, accounts))
+        }
+    });
+    cx.spawn(async move |cx| {
+        let signed_in = signed_in.await;
+        cx.update(|cx| {
+            let current = matches!(
+                &cx.global::<Cloud>().state,
+                State::SigningIn(started) if Arc::ptr_eq(started, &cancel)
+            );
+            if !current {
+                return;
+            }
+            match signed_in {
+                Ok((session, mut accounts)) if accounts.len() == 1 => {
+                    connect(session, accounts.remove(0), cx)
+                }
+                Ok((_, accounts)) if accounts.is_empty() => {
+                    fail("This Cloudflare sign-in can't reach any accounts.".into(), cx)
+                }
+                Ok((session, accounts)) => {
+                    cx.global_mut::<Cloud>().state = State::ChoosingAccount(session, accounts)
+                }
+                Err(snip_cloud::Error::Canceled) => cx.global_mut::<Cloud>().state = State::SignedOut,
+                Err(error) => fail(format!("Could not sign in: {error}"), cx),
+            }
+        });
+    })
+    .detach();
+}
+
+/// Abandons sign-in at once; a browser reply that still arrives is ignored.
+pub fn cancel_sign_in(cx: &mut App) {
+    let cloud = cx.global_mut::<Cloud>();
+    if let State::SigningIn(cancel) = &cloud.state {
+        cancel.store(true, Ordering::Relaxed);
+        cloud.state = State::SignedOut;
+        cloud.next_session();
+    }
+}
+
+pub fn choose_account(account: Account, cx: &mut App) {
+    let State::ChoosingAccount(session, _) = &cx.global::<Cloud>().state else {
+        return;
+    };
+    let session = session.clone();
+    connect(session, account, cx);
+}
+
+/// Tries the bucket again after the user enables R2.
+pub fn retry(cx: &mut App) {
+    let State::R2NotEnabled(session, account) = &cx.global::<Cloud>().state else {
+        return;
+    };
+    let (session, account) = (session.clone(), account.clone());
+    connect(session, account, cx);
+}
+
+fn connect(session: Arc<Session>, account: Account, cx: &mut App) {
+    let cloud = cx.global_mut::<Cloud>();
+    cloud.state = State::Connecting(session.clone());
+    cloud.error = None;
+    let credentials = cloud.credentials.clone();
+    let opened = cx.background_executor().spawn({
+        let (session, account) = (session.clone(), account.clone());
+        async move {
+            let bucket = Bucket::open(session, &account.id)?;
+            credentials
+                .save_account(&account)
+                .context("saving the chosen account")?;
+            Ok::<_, snip_cloud::Error>(bucket)
+        }
+    });
+    cx.spawn(async move |cx| {
+        let opened = opened.await;
+        cx.update(|cx| {
+            let current = matches!(
+                &cx.global::<Cloud>().state,
+                State::Connecting(started) if Arc::ptr_eq(started, &session)
+            );
+            if !current {
+                return;
+            }
+            match opened {
+                Ok(bucket) => cx.global_mut::<Cloud>().state = ready(bucket, account),
+                Err(snip_cloud::Error::R2NotEnabled) => {
+                    cx.global_mut::<Cloud>().state = State::R2NotEnabled(session, account)
+                }
+                Err(error) => fail(format!("Could not set up the snip-snip bucket: {error}"), cx),
+            }
+        });
+    })
+    .detach();
+}
+
+/// Forgets this machine's session. Cloud snips stay in the bucket.
+pub fn sign_out(cx: &mut App) {
+    cancel_sign_in(cx);
+    let cloud = cx.global_mut::<Cloud>();
+    cloud.state = State::SignedOut;
+    cloud.next_session();
+    cloud.error = cloud
+        .credentials
+        .clear()
+        .err()
+        .map(|error| format!("Could not forget the saved session: {error:#}"));
+}
+
+fn fail(message: String, cx: &mut App) {
+    sign_out(cx);
+    report(message, cx);
+}
+
+/// Runs `work` against the signed-in bucket off the UI thread, or returns
+/// `None` when signed out. A failure comes back described for a status line.
+/// An ended session also signs out, unless the user has already moved on to
+/// another one, so cloud features disappear until they sign in again.
+pub fn run<T: Send + 'static>(
+    cx: &mut App,
+    work: impl FnOnce(&dyn CloudStore) -> snip_cloud::Result<T> + Send + 'static,
+) -> Option<Task<Result<T, String>>> {
+    let store = store(cx)?;
+    let worked = cx.background_executor().spawn({
+        let store = store.clone();
+        async move { work(&*store) }
+    });
+    Some(cx.spawn(async move |cx| {
+        let worked = worked.await;
+        cx.update(|cx| {
+            worked.map_err(|error| match error {
+                snip_cloud::Error::SignedOut => {
+                    let message = "Your Cloudflare session ended. Sign in again in Settings.".to_owned();
+                    if self::store(cx).is_some_and(|current| Arc::ptr_eq(&current, &store)) {
+                        fail(message.clone(), cx);
+                    }
+                    message
+                }
+                error => error.to_string(),
+            })
+        })
+    }))
+}
+
+/// The OS credential store: Windows Credential Manager or the macOS Keychain.
+/// It holds two entries under the `snip-snip` service: the refresh token, and
+/// the chosen account as its id and name separated by a newline.
+pub struct Keychain;
+
+const SERVICE: &str = "snip-snip";
+
+/// Installs the platform store on first use; a failure surfaces on each call.
+static STORE: LazyLock<Result<(), String>> = LazyLock::new(|| {
+    #[cfg(windows)]
+    let store = windows_native_keyring_store::Store::new();
+    #[cfg(target_os = "macos")]
+    let store = apple_native_keyring_store::keychain::Store::new();
+    keyring_core::set_default_store(store.map_err(|error| error.to_string())?);
+    Ok(())
+});
+
+impl Keychain {
+    fn entry(user: &str) -> Result<keyring_core::Entry> {
+        STORE
+            .as_ref()
+            .map_err(|error| anyhow!("the credential store is unavailable: {error}"))?;
+        Ok(keyring_core::Entry::new(SERVICE, user)?)
+    }
+
+    fn get(user: &str) -> Result<Option<String>> {
+        match Self::entry(user)?.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+const SESSION: &str = "cloudflare-session";
+const ACCOUNT: &str = "cloudflare-account";
+
+impl Credentials for Keychain {
+    fn load(&self) -> Result<Option<(String, Account)>> {
+        let (Some(session), Some(account)) = (Self::get(SESSION)?, Self::get(ACCOUNT)?) else {
+            return Ok(None);
+        };
+        let (id, name) = account.split_once('\n').unwrap_or((&account, ""));
+        let account = Account {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        };
+        Ok(Some((session, account)))
+    }
+
+    fn save_session(&self, refresh_token: &str) -> Result<()> {
+        Ok(Self::entry(SESSION)?.set_password(refresh_token)?)
+    }
+
+    fn save_account(&self, account: &Account) -> Result<()> {
+        Ok(Self::entry(ACCOUNT)?.set_password(&format!("{}\n{}", account.id, account.name))?)
+    }
+
+    fn clear(&self) -> Result<()> {
+        for user in [SESSION, ACCOUNT] {
+            match Self::entry(user)?.delete_credential() {
+                Ok(()) | Err(keyring_core::Error::NoEntry) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub mod testing {
+    //! In-memory stand-ins for the credential store and the bucket.
+
+    use std::{
+        sync::{Mutex, atomic::AtomicBool},
+        time::SystemTime,
+    };
+
+    use super::*;
+
+    /// Cloud state signed in to `store`.
+    pub fn signed_in(store: Arc<MemoryStore>) -> Cloud {
+        let account = Account {
+            id: "account-1".into(),
+            name: "Kevin's Account".into(),
+        };
+        Cloud {
+            credentials: Arc::new(MemoryCredentials::signed_in(account.clone())),
+            state: State::Ready(Rc::new(Connection {
+                store,
+                account,
+                thumbnails: RefCell::default(),
+            })),
+            error: None,
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// A bucket held in memory, newest snip first.
+    #[derive(Default)]
+    pub struct MemoryStore {
+        pub snips: Mutex<Vec<(CloudSnip, RgbaImage)>>,
+        pub offline: AtomicBool,
+    }
+
+    impl MemoryStore {
+        fn reachable(&self) -> snip_cloud::Result<()> {
+            match self.offline.load(Ordering::Relaxed) {
+                true => Err(snip_cloud::Error::Other(anyhow!("the network is unreachable"))),
+                false => Ok(()),
+            }
+        }
+    }
+
+    impl CloudStore for MemoryStore {
+        fn upload(&self, image: &RgbaImage) -> snip_cloud::Result<CloudSnip> {
+            self.reachable()?;
+            let snip = CloudSnip::new(SystemTime::now());
+            self.snips
+                .lock()
+                .unwrap()
+                .insert(0, (snip.clone(), image.clone()));
+            Ok(snip)
+        }
+        fn latest(&self, limit: usize) -> snip_cloud::Result<Vec<CloudSnip>> {
+            self.reachable()?;
+            Ok(self
+                .snips
+                .lock()
+                .unwrap()
+                .iter()
+                .take(limit)
+                .map(|(snip, _)| snip.clone())
+                .collect())
+        }
+        fn image(&self, snip: &CloudSnip) -> snip_cloud::Result<RgbaImage> {
+            self.reachable()?;
+            let snips = self.snips.lock().unwrap();
+            let found = snips.iter().find(|(stored, _)| stored == snip);
+            Ok(found.context("no such cloud snip")?.1.clone())
+        }
+        fn thumbnail(&self, snip: &CloudSnip) -> snip_cloud::Result<Vec<u8>> {
+            snip_cloud::encode(&self.image(snip)?)
+        }
+        fn delete(&self, snip: &CloudSnip) -> snip_cloud::Result<()> {
+            self.reachable()?;
+            self.snips.lock().unwrap().retain(|(stored, _)| stored != snip);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    pub struct MemoryCredentials {
+        pub saved: Mutex<(Option<String>, Option<Account>)>,
+    }
+
+    impl MemoryCredentials {
+        pub fn signed_in(account: Account) -> Self {
+            Self {
+                saved: Mutex::new((Some("refresh-0".into()), Some(account))),
+            }
+        }
+    }
+
+    impl Credentials for MemoryCredentials {
+        fn load(&self) -> Result<Option<(String, Account)>> {
+            let saved = self.saved.lock().unwrap();
+            Ok(saved.0.clone().zip(saved.1.clone()))
+        }
+        fn save_session(&self, refresh_token: &str) -> Result<()> {
+            self.saved.lock().unwrap().0 = Some(refresh_token.to_owned());
+            Ok(())
+        }
+        fn save_account(&self, account: &Account) -> Result<()> {
+            self.saved.lock().unwrap().1 = Some(account.clone());
+            Ok(())
+        }
+        fn clear(&self) -> Result<()> {
+            *self.saved.lock().unwrap() = (None, None);
+            Ok(())
+        }
+    }
+}

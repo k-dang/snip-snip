@@ -13,6 +13,7 @@ choose those affected by the change.
 - [Crop](crop.md): crop creation, adjustment, clearing, exports.
 - [Undo and redo](undo-redo.md): history across annotations and crop.
 - [Export](export.md): Copy, Copy & Close, Save, cancellation, failure handling.
+- [Cloud](cloud.md): Sign in with Cloudflare, Copy to cloud, tray copy, Library.
 
 ## Native platform coverage recorded on 2026-10-12
 

@@ -13,15 +13,16 @@ use gpui::{AsyncWindowContext, Task};
 
 use super::super::export::{ExportEnvironment, ExportServices, window_save_picker};
 use super::*;
+use crate::clipboard::{Clipboard, ClipboardService};
 
-struct TestExports {
+pub(super) struct TestExports {
     root: tempfile::TempDir,
     pictures: RefCell<Option<PathBuf>>,
     home: RefCell<Option<PathBuf>>,
     time: RefCell<Result<DateTime<FixedOffset>, String>>,
     suggestions: RefCell<Vec<(PathBuf, String)>>,
     picker_windows: RefCell<Vec<Option<gpui::AnyWindowHandle>>>,
-    clipboard: RefCell<Option<RgbaImage>>,
+    pub(super) clipboard: RefCell<Option<RgbaImage>>,
     clipboard_error: Cell<bool>,
     picker_error: Cell<bool>,
 }
@@ -44,10 +45,23 @@ impl TestExports {
         })
     }
 
-    fn configure(cx: &mut TestAppContext) -> Rc<Self> {
+    pub(super) fn configure(cx: &mut TestAppContext) -> Rc<Self> {
         let effects = Self::new();
-        cx.update(|cx| cx.set_global(ExportServices(effects.clone())));
+        cx.update(|cx| {
+            cx.set_global(ExportServices(effects.clone()));
+            cx.set_global(ClipboardService(effects.clone()));
+        });
         effects
+    }
+}
+
+impl Clipboard for TestExports {
+    fn write(&self, image: &RgbaImage) -> Result<()> {
+        if self.clipboard_error.get() {
+            return Err(anyhow!("clipboard unavailable"));
+        }
+        self.clipboard.replace(Some(image.clone()));
+        Ok(())
     }
 }
 
@@ -58,14 +72,6 @@ impl ExportEnvironment for TestExports {
 
     fn local_time(&self) -> Result<DateTime<FixedOffset>> {
         self.time.borrow().clone().map_err(|error| anyhow!(error))
-    }
-
-    fn write_clipboard(&self, image: RgbaImage) -> Result<()> {
-        if self.clipboard_error.get() {
-            return Err(anyhow!("clipboard unavailable"));
-        }
-        self.clipboard.replace(Some(image));
-        Ok(())
     }
 
     fn choose_save_path(

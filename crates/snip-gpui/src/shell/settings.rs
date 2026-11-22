@@ -1,10 +1,14 @@
 use global_hotkey::hotkey::HotKey;
 use gpui::{
-    App, Bounds, Context, FocusHandle, KeyDownEvent, ModifiersChangedEvent, Render, SharedString,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, FocusHandle, KeyDownEvent, ModifiersChangedEvent, Render, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 use super::{Shell, shortcut};
+use crate::{
+    cloud::{self, Cloud, State},
+    ui::{self, button, line},
+};
 
 pub struct Settings {
     focus: FocusHandle,
@@ -28,7 +32,7 @@ pub fn open(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(480.), px(320.)), cx);
+    let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -36,7 +40,7 @@ pub fn open(cx: &mut App) {
                 title: Some("snip-snip Settings".into()),
                 ..Default::default()
             }),
-            window_min_size: Some(size(px(440.), px(300.))),
+            window_min_size: Some(size(px(440.), px(420.))),
             ..Default::default()
         },
         |window, cx| {
@@ -60,6 +64,7 @@ pub fn open(cx: &mut App) {
                     this.cancel(cx)
                 })
                 .detach();
+                cx.observe_global::<Cloud>(|_, cx| cx.notify()).detach();
                 cx.on_release(|_, cx| {
                     if cx.has_global::<Shell>() {
                         cx.global_mut::<Shell>().recording = false;
@@ -202,15 +207,6 @@ impl Settings {
     }
 }
 
-fn line(text: String) -> impl IntoElement {
-    div()
-        .debug_selector({
-            let text = text.clone();
-            move || text
-        })
-        .child(text)
-}
-
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let applied = shortcut::label(cx.global::<Shell>().shortcut);
@@ -299,17 +295,76 @@ impl Render for Settings {
                             })),
                     ),
             )
-            .children(error.into_iter().chain(self.message.clone()).map(|message| {
-                div()
-                    .debug_selector({
-                        let message = message.clone();
-                        move || message
-                    })
-                    .text_color(rgb(0xffb8a8))
-                    .child(SharedString::from(message))
-            }))
-            .children(status.map(|status| div().text_color(rgb(0xa8d9c0)).child(line(status))))
+            .children(
+                error
+                    .into_iter()
+                    .chain(self.message.clone())
+                    .map(|message| line(message).text_color(rgb(ui::ERROR))),
+            )
+            .children(status.map(|status| line(status).text_color(rgb(ui::SUCCESS))))
+            .child(cloud_section(cx))
     }
+}
+
+fn cloud_section(cx: &App) -> impl IntoElement {
+    let cloud = cx.global::<Cloud>();
+    let row = || div().flex().gap_3();
+    let section = div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .mt_3()
+        .child(div().text_size(px(20.)).child("Cloud snips"));
+    let sign_out = || button("cloud-sign-out", "Sign out").on_click(|_, _, cx| cloud::sign_out(cx));
+    let section = match cloud.state() {
+        State::SignedOut => section
+            .child(line(
+                "Copy snips between your machines through an R2 bucket in your Cloudflare account.",
+            ))
+            .child(row().child(
+                button("cloud-sign-in", "Sign in with Cloudflare").on_click(|_, _, cx| cloud::sign_in(cx)),
+            )),
+        State::SigningIn(_) => section.child(line("Finish signing in in your browser.")).child(
+            row().child(button("cloud-cancel", "Cancel").on_click(|_, _, cx| cloud::cancel_sign_in(cx))),
+        ),
+        State::ChoosingAccount(_, accounts) => section
+            .child(line("Choose the Cloudflare account that holds your cloud snips:"))
+            .child(row().flex_wrap().children(accounts.iter().map(|account| {
+                let chosen = account.clone();
+                button(format!("cloud-account-{}", account.id), account.name.clone())
+                    .on_click(move |_, _, cx| cloud::choose_account(chosen.clone(), cx))
+            })))
+            .child(row().child(sign_out())),
+        State::Connecting(_) => section.child(line("Setting up the snip-snip bucket…")),
+        State::R2NotEnabled(_, account) => {
+            let dashboard = snip_cloud::Config::r2_dashboard(&account.id);
+            section
+                .child(line(format!(
+                    "R2 isn't enabled on {}. Enable it in the Cloudflare dashboard, then retry.",
+                    account.name
+                )))
+                .child(
+                    row()
+                        .child(
+                            button("cloud-open-r2", "Open R2 in Cloudflare").on_click(move |_, _, cx| {
+                                if let Err(error) = open::that(&dashboard) {
+                                    cloud::report(format!("Could not open the browser: {error}"), cx);
+                                }
+                            }),
+                        )
+                        .child(button("cloud-retry", "Retry").on_click(|_, _, cx| cloud::retry(cx)))
+                        .child(sign_out()),
+                )
+        }
+        State::Ready(connection) => section
+            .child(line(format!("Signed in to {}", connection.account.name)))
+            .child(row().child(sign_out())),
+    };
+    section.children(
+        cloud
+            .error()
+            .map(|message| line(message.to_owned()).text_color(rgb(ui::ERROR))),
+    )
 }
 
 pub fn show_startup_error(message: String, cx: &mut App) {

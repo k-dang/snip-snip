@@ -379,6 +379,17 @@ impl Editor {
                     this.copy(true, window, cx);
                 },
             ))
+            .when(crate::cloud::store(cx).is_some(), |menu| {
+                menu.child(menu_item(
+                    "Copy to cloud",
+                    Some(shortcut("Shift+D")),
+                    cx,
+                    |this, window, cx, _| {
+                        window.focus(&this.focus, cx);
+                        this.copy_to_cloud(window, cx);
+                    },
+                ))
+            })
             .child(div().my_1().h(px(1.)).bg(rgb(BORDER)))
             .child(menu_item(
                 "Save…",

@@ -4,6 +4,7 @@ use std::{
     fs,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context as _, Result};
@@ -11,6 +12,8 @@ use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use global_hotkey::hotkey::HotKey;
 use gpui::{App, BorrowAppContext, Global, WindowHandle};
+
+use crate::cloud::{self, Credentials, Keychain};
 
 mod native;
 mod settings;
@@ -21,6 +24,8 @@ mod tests;
 pub enum ShellEvent {
     Settings,
     NewSnip,
+    CopyLatestCloudSnip,
+    CloudLibrary,
     Hotkey { id: u32, pressed: bool },
     Quit,
 }
@@ -33,6 +38,8 @@ pub trait ShellPlatform {
     fn unregister(&mut self, shortcut: HotKey) -> Result<()>;
     fn capture(&mut self, cx: &mut App);
     fn dismiss_menu(&mut self) -> Result<()>;
+    /// Shows the tray's cloud items only while signed in.
+    fn show_cloud_menu(&mut self, visible: bool) -> Result<()>;
 }
 
 pub struct Shell {
@@ -50,12 +57,16 @@ pub struct Shell {
 
 impl Global for Shell {}
 
+/// Installs the shell and the cloud state Settings and the tray depend on.
+/// `credentials` is where the cloud session is saved.
 pub fn install(
     mut platform: Box<dyn ShellPlatform>,
     path: PathBuf,
+    credentials: Arc<dyn Credentials>,
     mut events: UnboundedReceiver<ShellEvent>,
     cx: &mut App,
 ) {
+    cloud::install(credentials, cx);
     let (shortcut, mut error) = match fs::read_to_string(&path) {
         Ok(saved) => match saved
             .trim()
@@ -111,6 +122,16 @@ pub fn install(
     if show_error {
         settings::open(cx);
     }
+    cx.observe_global::<cloud::Cloud>(|cx| {
+        let signed_in = cloud::store(cx).is_some();
+        if cx.has_global::<Shell>()
+            && let Err(error) =
+                cx.update_global::<Shell, _>(|shell, _| shell.platform.show_cloud_menu(signed_in))
+        {
+            eprintln!("shell: could not update the cloud menu items: {error:#}");
+        }
+    })
+    .detach();
     cx.on_app_quit(|cx| {
         if cx.has_global::<Shell>() {
             cx.remove_global::<Shell>();
@@ -145,6 +166,8 @@ pub fn install(
                 }
                 match event {
                     ShellEvent::Settings => settings::open(cx),
+                    ShellEvent::CopyLatestCloudSnip => crate::library::copy_latest(cx),
+                    ShellEvent::CloudLibrary => crate::library::open(cx),
                     ShellEvent::NewSnip => cx.update_global::<Shell, _>(|shell, cx| {
                         if !shell.recording {
                             shell.platform.capture(cx);
@@ -202,7 +225,7 @@ pub fn start(cx: &mut App) -> Result<()> {
         .context("locating the user settings folder")?
         .join("snip-snip")
         .join("shortcut");
-    install(Box::new(platform), path, rx, cx);
+    install(Box::new(platform), path, Arc::new(Keychain), rx, cx);
     eprintln!(
         "snip-snip running; capture shortcut: {}",
         shortcut::label(cx.global::<Shell>().shortcut)

@@ -26,7 +26,7 @@ snipctl <command> [args]
   doctor                read-only health check of the current run
   target                show the fixture (blue|green halves) at screen 100,100 size 800x500
   snip X Y W H [CHORD]  capture with CHORD (default Alt+Shift+S), drag, wait for editor
-  shell-menu ITEM       Windows tray menu: new-snip, settings, quit
+  shell-menu ITEM       Windows tray menu: new-snip, settings, cloud-latest, cloud-library, quit
   shell-key COMBO...    focus Settings if open, then send real keyboard input
   cancel-snip           Alt+Shift+S, then Esc on the overlay; asserts no editor opens
   layout                print the painted image transform at the current zoom
@@ -455,8 +455,10 @@ fn shell_menu(item: &str) -> Result<()> {
     let label = match item {
         "new-snip" => "New snip",
         "settings" => "Settings",
+        "cloud-latest" => "Copy latest cloud snip",
+        "cloud-library" => "Cloud library",
         "quit" => "Quit",
-        _ => bail!("expected new-snip, settings, or quit"),
+        _ => bail!("expected new-snip, settings, cloud-latest, cloud-library, or quit"),
     };
     let frames = run.count_in_log("overlay first frame");
     platform::tray_menu(pid, label, &mut Input::new()?)?;
@@ -470,6 +472,13 @@ fn shell_menu(item: &str) -> Result<()> {
         "settings" => {
             wait_for("Settings", Duration::from_secs(5), || {
                 screen::titled(pid, "snip-snip Settings")
+            })?;
+        }
+        // The copy happens in the background; read the clipboard afterwards.
+        "cloud-latest" => std::thread::sleep(Duration::from_secs(3)),
+        "cloud-library" => {
+            wait_for("the Library", Duration::from_secs(5), || {
+                screen::titled(pid, "snip-snip Library")
             })?;
         }
         "quit" => {

@@ -17,6 +17,10 @@ mod macos;
 pub struct NativeShell {
     // Dropping the icon also releases its native menu.
     _tray: TrayIcon,
+    menu: Menu,
+    /// Copy latest cloud snip and Cloud library, inserted while signed in.
+    cloud_items: [MenuItem; 2],
+    cloud_shown: bool,
     manager: Option<GlobalHotKeyManager>,
 }
 
@@ -29,8 +33,12 @@ impl NativeShell {
             &MenuItem::with_id("snip-quit", "Quit", true, None),
         ])
         .context("creating the tray menu")?;
+        let cloud_items = [
+            MenuItem::with_id("snip-cloud-latest", "Copy latest cloud snip", true, None),
+            MenuItem::with_id("snip-cloud-library", "Cloud library", true, None),
+        ];
         let builder = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .with_tooltip("snip-snip")
             .with_menu_on_left_click(true);
         #[cfg(target_os = "macos")]
@@ -46,6 +54,8 @@ impl NativeShell {
             let event = match event.id.0.as_str() {
                 "snip-new" => ShellEvent::NewSnip,
                 "snip-settings" => ShellEvent::Settings,
+                "snip-cloud-latest" => ShellEvent::CopyLatestCloudSnip,
+                "snip-cloud-library" => ShellEvent::CloudLibrary,
                 "snip-quit" => ShellEvent::Quit,
                 _ => return,
             };
@@ -60,6 +70,9 @@ impl NativeShell {
         }));
         Ok(Self {
             _tray: tray,
+            menu,
+            cloud_items,
+            cloud_shown: false,
             manager: None,
         })
     }
@@ -102,6 +115,21 @@ impl ShellPlatform for NativeShell {
         #[cfg(windows)]
         finish_composition();
         crate::overlay::start(cx);
+    }
+    fn show_cloud_menu(&mut self, visible: bool) -> Result<()> {
+        if visible == self.cloud_shown {
+            return Ok(());
+        }
+        let [latest, library] = &self.cloud_items;
+        if visible {
+            // After New snip.
+            self.menu.insert_items(&[latest, library], 1)?;
+        } else {
+            self.menu.remove(latest)?;
+            self.menu.remove(library)?;
+        }
+        self.cloud_shown = visible;
+        Ok(())
     }
 }
 

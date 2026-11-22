@@ -95,6 +95,8 @@ struct Editor {
     menu_bounds: [Rc<Cell<Bounds<gpui::Pixels>>>; 3],
     popup_focus: FocusHandle,
     status: SharedString,
+    /// A Copy to cloud upload is in flight; the editor closes when it lands.
+    uploading: bool,
 }
 
 impl Editor {
@@ -130,6 +132,7 @@ impl Editor {
             menu_bounds: std::array::from_fn(|_| Rc::new(Cell::new(Bounds::default()))),
             popup_focus: cx.focus_handle(),
             status,
+            uploading: false,
         }
     }
 
@@ -323,6 +326,7 @@ impl Editor {
             (true, "y") if cfg!(windows) && keystroke.modifiers.control => {
                 return self.restore_history(true, window, cx);
             }
+            (true, "d") if keystroke.modifiers.shift => return self.copy_to_cloud(window, cx),
             (true, "c") => return self.copy(true, window, cx),
             (true, "s") => return self.save(window, cx),
             _ => {}

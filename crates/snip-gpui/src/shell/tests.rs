@@ -1,6 +1,6 @@
 //! Drive Settings and shell events through the agreed GPUI / native-effect seam.
 
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 
 use anyhow::{Result, bail};
 use futures::channel::mpsc;
@@ -8,6 +8,7 @@ use global_hotkey::hotkey::HotKey;
 use gpui::{App, Modifiers, TestAppContext, VisualTestContext};
 
 use super::{ShellEvent, ShellPlatform};
+use crate::cloud::{Credentials, testing::MemoryCredentials};
 
 #[derive(Default)]
 struct NativeState {
@@ -17,6 +18,7 @@ struct NativeState {
     released: bool,
     recorded: Option<HotKey>,
     fail_release: Option<HotKey>,
+    cloud_menu: bool,
 }
 
 struct TestPlatform(Rc<RefCell<NativeState>>);
@@ -51,6 +53,15 @@ impl ShellPlatform for TestPlatform {
     fn capture(&mut self, _: &mut App) {
         self.0.borrow_mut().captures += 1;
     }
+    fn show_cloud_menu(&mut self, visible: bool) -> Result<()> {
+        self.0.borrow_mut().cloud_menu = visible;
+        Ok(())
+    }
+}
+
+/// No saved cloud session.
+fn no_cloud() -> Arc<dyn Credentials> {
+    Arc::new(MemoryCredentials::default())
 }
 
 #[gpui::test]
@@ -63,7 +74,15 @@ fn recording_uses_the_physical_key_returned_by_the_platform(cx: &mut TestAppCont
         ..Default::default()
     }));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -98,7 +117,15 @@ fn a_release_failure_restores_the_original_settings_and_working_chord(cx: &mut T
     let native = Rc::new(RefCell::new(NativeState::default()));
     native.borrow_mut().fail_release = Some("alt+shift+s".parse().unwrap());
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -130,7 +157,7 @@ fn unreadable_but_replaceable_settings_can_be_repaired_through_apply(cx: &mut Te
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native)), path.clone(), rx, cx));
+    cx.update(|cx| super::install(Box::new(TestPlatform(native)), path.clone(), no_cloud(), rx, cx));
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -194,6 +221,7 @@ fn recording_a_shortcut_displays_it_before_apply(cx: &mut TestAppContext) {
         super::install(
             Box::new(TestPlatform(native.clone())),
             folder.path().join("shortcut"),
+            no_cloud(),
             rx,
             cx,
         )
@@ -214,7 +242,15 @@ fn applying_replaces_the_shortcut_and_remembers_it_on_restart(cx: &mut TestAppCo
     let path = folder.path().join("shortcut");
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -247,7 +283,7 @@ fn applying_replaces_the_shortcut_and_remembers_it_on_restart(cx: &mut TestAppCo
     let restarted = view.new_app();
     let fresh = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    restarted.update(|cx| super::install(Box::new(TestPlatform(fresh.clone())), path, rx, cx));
+    restarted.update(|cx| super::install(Box::new(TestPlatform(fresh.clone())), path, no_cloud(), rx, cx));
     assert_eq!(fresh.borrow().registered, HashSet::from([new]));
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     restarted.run_until_parked();
@@ -269,6 +305,7 @@ fn startup_conflict_keeps_menu_capture_and_settings_available(cx: &mut TestAppCo
         super::install(
             Box::new(TestPlatform(native.clone())),
             folder.path().join("shortcut"),
+            no_cloud(),
             rx,
             cx,
         )
@@ -317,6 +354,7 @@ fn recording_validates_cancels_and_accepts_the_registered_chord_without_capture(
         super::install(
             Box::new(TestPlatform(native.clone())),
             folder.path().join("shortcut"),
+            no_cloud(),
             rx,
             cx,
         )
@@ -373,7 +411,15 @@ fn a_conflicting_replacement_preserves_the_applied_shortcut_and_saved_value(cx: 
         .conflicts
         .insert("ctrl+alt+k".parse().unwrap());
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -401,7 +447,7 @@ fn malformed_settings_are_preserved_until_the_user_applies_a_shortcut(cx: &mut T
     std::fs::write(&path, "shift+s").unwrap();
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native)), path.clone(), rx, cx));
+    cx.update(|cx| super::install(Box::new(TestPlatform(native)), path.clone(), no_cloud(), rx, cx));
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
     let mut view = VisualTestContext::from_window(window, cx);
@@ -425,7 +471,15 @@ fn an_unwritable_settings_destination_does_not_replace_the_working_shortcut(cx: 
     let path = folder.path().join("shortcut");
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -455,7 +509,15 @@ fn applying_defers_disk_work_and_finishes_after_settings_closes(cx: &mut TestApp
     let path = folder.path().join("shortcut");
     let native = Rc::new(RefCell::new(NativeState::default()));
     let (tx, rx) = mpsc::unbounded();
-    cx.update(|cx| super::install(Box::new(TestPlatform(native.clone())), path.clone(), rx, cx));
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            path.clone(),
+            no_cloud(),
+            rx,
+            cx,
+        )
+    });
     tx.unbounded_send(ShellEvent::Settings).unwrap();
     cx.run_until_parked();
     let window = cx.update(|cx| cx.windows()[0]);
@@ -479,4 +541,35 @@ fn applying_defers_disk_work_and_finishes_after_settings_closes(cx: &mut TestApp
     let window = view.cx.update(|cx| cx.windows()[0]);
     let mut reopened = VisualTestContext::from_window(window, &view.cx);
     assert!(reopened.debug_bounds(APPLIED_NEW).is_some());
+}
+
+#[gpui::test]
+fn signing_out_forgets_the_saved_cloud_session(cx: &mut TestAppContext) {
+    let folder = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(MemoryCredentials::signed_in(snip_cloud::Account {
+        id: "account-1".into(),
+        name: "Kevin's Account".into(),
+    }));
+    let native = Rc::new(RefCell::new(NativeState::default()));
+    let (tx, rx) = mpsc::unbounded();
+    cx.update(|cx| {
+        super::install(
+            Box::new(TestPlatform(native.clone())),
+            folder.path().join("shortcut"),
+            credentials.clone(),
+            rx,
+            cx,
+        )
+    });
+    tx.unbounded_send(ShellEvent::Settings).unwrap();
+    cx.run_until_parked();
+    assert!(native.borrow().cloud_menu);
+    let window = cx.update(|cx| cx.windows()[0]);
+    let mut view = VisualTestContext::from_window(window, cx);
+    assert!(view.debug_bounds("Signed in to Kevin's Account").is_some());
+    click(&mut view, "Sign out");
+    view.run_until_parked();
+    assert!(view.debug_bounds("Sign in with Cloudflare").is_some());
+    assert!(credentials.load().unwrap().is_none());
+    assert!(!native.borrow().cloud_menu);
 }

@@ -1,0 +1,19 @@
+[package]
+name = "snip-cloud"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+getrandom = "0.3"
+image = { workspace = true, features = ["webp"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = { version = "3", features = ["json"] }
+url = "2"
