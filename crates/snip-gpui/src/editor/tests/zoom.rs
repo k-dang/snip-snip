@@ -42,7 +42,7 @@ fn native_notch() -> f32 {
 
 /// The visible screenshot edge, excluding its one-logical-pixel outline.
 fn painted_image(cx: &mut VisualTestContext) -> Bounds<Pixels> {
-    painted_outline(cx, hsla(0., 0., 1., 0.12)).dilate(px(-1.))
+    painted_outline(cx, hsla(0., 0., 1., 0.10)).dilate(px(-1.))
 }
 
 fn painted_selection(cx: &mut VisualTestContext) -> Bounds<Pixels> {

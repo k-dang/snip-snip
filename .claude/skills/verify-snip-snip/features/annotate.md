@@ -8,15 +8,15 @@ The editor draws red (#E5484D) pencil strokes, arrows, rectangle outlines, and t
 - `annotate-arrow` `A` then drag draws an arrow, head at the release point; drags under 3 image px are ignored.
 - `annotate-rect` `R` then drag draws a rectangle outline; an empty drag is ignored.
 - `annotate-text` `T` then click places a caret; typing inserts at the caret; `Enter` starts a new line; arrows, `Home`/`End`, and clicks inside the label move the caret; `Esc` or clicking away finishes; a blank label is dropped; clicking existing text re-edits it at the click.
-- `annotate-tool` the active tool is highlighted in the toolbar.
+- `annotate-tool` the active tool is highlighted in the dock.
 - `annotate-select` `V` selects one annotation; drag to move, Delete to remove, or drag an arrow endpoint/rectangle corner to resize. Shift constrains arrows and squares.
-- `annotate-style` toolbar colors and Thin/Medium/Thick widths carry across tools and restyle a selected annotation. Text uses color and disables widths.
+- `annotate-style` dock colors and Thin/Medium/Thick widths carry across tools and restyle a selected annotation. Text uses color and disables widths.
 
 ## How to get to it (user POV)
 
-- Keys `P`, `A`, `R`, `T` in the editor, or the matching toolbar buttons.
+- Keys `P`, `A`, `R`, `T` in the editor, or the matching dock buttons.
 - Drag or click on the image.
-- Select with `V`; double-click text to re-edit. Choose colors and widths in the toolbar.
+- Select with `V`; double-click text to re-edit. Choose colors and widths in the dock's Ink popover.
 
 ## Driving it with snipctl
 

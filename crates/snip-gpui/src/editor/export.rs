@@ -120,15 +120,11 @@ fn save_defaults(directory: PathBuf, time: DateTime<FixedOffset>) -> Result<(Pat
 impl Editor {
     pub(super) fn copy(&mut self, close_after_copy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let image = self.export(window);
-        self.status = match crate::clipboard::write(&image, cx) {
-            Ok(()) if close_after_copy => {
-                window.remove_window();
-                return;
-            }
-            Ok(()) => "Copied to clipboard".into(),
-            Err(error) => format!("Copy failed: {error:#}").into(),
-        };
-        cx.notify();
+        match crate::clipboard::write(&image, cx) {
+            Ok(()) if close_after_copy => window.remove_window(),
+            Ok(()) => self.toast_success("Copied to clipboard", cx),
+            Err(error) => self.toast_error(format!("Copy failed: {error:#}"), cx),
+        }
     }
 
     /// Copies like Copy & Close and also uploads the snip, closing once it
@@ -140,15 +136,16 @@ impl Editor {
         }
         let image = self.export(window);
         if let Err(error) = crate::clipboard::write(&image, cx) {
-            self.status = format!("Copy failed: {error:#}").into();
-            return cx.notify();
+            return self.toast_error(format!("Copy failed: {error:#}"), cx);
         }
         let uploaded = edits(self.model.document());
         let Some(upload) = crate::cloud::run(cx, move |store| store.upload(&image)) else {
             return;
         };
+        // The Export button shows the upload and is disabled until it lands,
+        // so focus can't stay on it.
         self.uploading = true;
-        self.status = "Uploading to the cloud…".into();
+        window.focus(&self.focus, cx);
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let upload = upload.await;
@@ -163,13 +160,11 @@ impl Editor {
                 }
                 Ok(_) => {
                     this.uploading = false;
-                    this.status = "Uploaded to the cloud, without your later edits".into();
-                    cx.notify();
+                    this.toast_success("Uploaded to the cloud, without your later edits", cx);
                 }
                 Err(message) => {
                     this.uploading = false;
-                    this.status = format!("Copy to cloud failed: {message}").into();
-                    cx.notify();
+                    this.toast_error(format!("Copy to cloud failed: {message}"), cx);
                 }
             })
             .ok();
@@ -192,9 +187,7 @@ impl Editor {
         let (directory, time) = match defaults {
             Ok(defaults) => defaults,
             Err(error) => {
-                self.status = format!("Save failed: {error:#}").into();
-                cx.notify();
-                return;
+                return self.toast_error(format!("Save failed: {error:#}"), cx);
             }
         };
         // Pictures may be redirected to slow storage.
@@ -217,14 +210,14 @@ impl Editor {
                     .await
             }
             .await;
-            let status = match written {
-                Ok(Some(path)) => format!("Saved {}", path.display()),
-                Err(error) => format!("Save failed: {error:#}"),
-                Ok(None) => return,
-            };
-            this.update(cx, |this, cx| {
-                this.status = status.into();
-                cx.notify();
+            this.update(cx, |this, cx| match written {
+                // The dialog showed the folder; the file name is enough here.
+                Ok(Some(path)) => {
+                    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                    this.toast_success(format!("Saved {name}"), cx);
+                }
+                Err(error) => this.toast_error(format!("Save failed: {error:#}"), cx),
+                Ok(None) => {}
             })
             .ok();
         })

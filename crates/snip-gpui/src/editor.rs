@@ -6,10 +6,10 @@
 use std::{cell::Cell, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
-    App, Bounds, Context, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
+    App, Bounds, Context, Corners, CursorStyle, ElementInputHandler, FocusHandle, Hsla, KeyDownEvent,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Render,
-    RenderImage, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, hsla,
-    outline, point, prelude::*, px, rgb, size,
+    RenderImage, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, fill, hsla,
+    linear_color_stop, linear_gradient, outline, point, prelude::*, px, quad, rgb, size,
 };
 use snip_core::{Annotation, Color, Point, Rect, RgbaImage, Stroke};
 
@@ -23,6 +23,9 @@ mod editing;
 mod export;
 mod navigation;
 mod text;
+mod theme;
+mod title_bar;
+mod toast;
 mod toolbar;
 mod view;
 // GPUI's rendered-element selectors are only available in debug builds.
@@ -40,6 +43,7 @@ const WIDTHS: [(&str, f32); 3] = [("Thin", 1.0), ("Medium", 3.0), ("Thick", 6.0)
 const CANVAS_PADDING: f32 = 16.0;
 static VERIFY_VIEW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 const HANDLE_SIZE: f32 = 8.0;
+const IMAGE_RADIUS: f32 = 6.0;
 
 /// Opens an editor window for a freshly snipped image. `scale` is the source
 /// monitor's image pixels per logical pixel, so the window opens at the size
@@ -47,7 +51,7 @@ const HANDLE_SIZE: f32 = 8.0;
 pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
     let content = size(
         px(image.width() as f32 / scale + 2.0 * CANVAS_PADDING),
-        px(image.height() as f32 / scale + 2.0 * CANVAS_PADDING + toolbar::HEIGHT + toolbar::STATUS_HEIGHT),
+        px(image.height() as f32 / scale + 2.0 * CANVAS_PADDING + title_bar::HEIGHT + toolbar::BOTTOM_INSET),
     );
     let max = cx
         .primary_display()
@@ -62,6 +66,8 @@ pub fn open(image: RgbaImage, scale: f32, cx: &mut App) {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, window_size, cx))),
         titlebar: Some(TitlebarOptions {
             title: Some("snip-snip".into()),
+            // The editor draws its own title bar over the canvas.
+            appears_transparent: true,
             ..Default::default()
         }),
         focus: true,
@@ -94,7 +100,8 @@ struct Editor {
     menu_focus: [FocusHandle; 3],
     menu_bounds: [Rc<Cell<Bounds<gpui::Pixels>>>; 3],
     popup_focus: FocusHandle,
-    status: SharedString,
+    /// The latest export outcome, shown above the dock.
+    toast: Option<toast::Toast>,
     /// A Copy to cloud upload is in flight; the editor closes when it lands.
     uploading: bool,
 }
@@ -116,7 +123,6 @@ impl Editor {
             }
         })
         .detach();
-        let status = format!("{} × {} px", image.width(), image.height()).into();
         let preview = to_render_image(&image);
         Self {
             preview,
@@ -131,7 +137,7 @@ impl Editor {
             menu_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             menu_bounds: std::array::from_fn(|_| Rc::new(Cell::new(Bounds::default()))),
             popup_focus: cx.focus_handle(),
-            status,
+            toast: None,
             uploading: false,
         }
     }
@@ -398,6 +404,51 @@ impl Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(0x17171D), 0.),
+                linear_color_stop(rgb(0x08080A), 1.),
+            ))
+            .text_color(rgb(theme::TEXT))
+            .text_sm()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event, window, cx| this.on_key_down(event, window, cx)))
+            .on_key_up(cx.listener(Self::on_key_up))
+            .on_modifiers_changed(
+                cx.listener(|this, event, window, cx| this.on_modifiers_changed(event, window, cx)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    // The image fits between the title bar and the dock, but
+                    // pans and zooms underneath both.
+                    .pt(px(title_bar::HEIGHT))
+                    .pb(px(toolbar::BOTTOM_INSET))
+                    .overflow_hidden()
+                    .cursor(self.cursor)
+                    .on_scroll_wheel(cx.listener(Self::on_scroll))
+                    .on_pinch(cx.listener(Self::on_pinch))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event, window, cx| this.on_mouse_down(event, window, cx)),
+                    )
+                    .child(self.image_canvas(window, cx)),
+            )
+            .child(title_bar::render(window, cx))
+            .child(self.bottom_overlay(window, cx))
+    }
+}
+
+impl Editor {
+    /// The image and its live overlays, in the area between the insets.
+    fn image_canvas(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let preview = self.preview.clone();
         let image_size = self.model.document().image.dimensions();
         let viewport_cell = self.viewport.clone();
@@ -413,91 +464,72 @@ impl Render for Editor {
         let editing = self.model.is_editing_text();
         let focus = self.focus.clone();
         let painted_zoom_label = self.viewport.zoom_label();
+        div().debug_selector(|| "editor-canvas".into()).size_full().child(
+            canvas(
+                move |bounds, window, cx| {
+                    let viewport = layout_viewport.resolve(bounds, image_size, device_scale);
+                    let dimensions = viewport.and_then(|viewport| {
+                        crop_dimensions
+                            .map(|crop| crop::prepaint_dimensions(crop, viewport, bounds, window, cx))
+                    });
+                    (viewport, dimensions)
+                },
+                move |bounds, (viewport, dimensions), window, cx| {
+                    if editing {
+                        window.handle_input(&focus, ElementInputHandler::new(bounds, this.clone()), cx);
+                    }
+                    drag::track(window, this.clone(), Self::on_mouse_move, Self::on_mouse_up);
+                    if let Some(viewport) = viewport {
+                        paint_canvas(window, viewport, image_size, preview, overlay);
+                        // Verification observes the painted transform; input still goes through the OS.
+                        if *VERIFY_VIEW.get_or_init(|| std::env::var_os("SNIP_SNIP_VERIFY").is_some()) {
+                            let content = window.viewport_size();
+                            eprintln!(
+                                "snipctl-view: {} {} {} {} {} {} {} {}",
+                                image_size.0,
+                                image_size.1,
+                                f32::from(viewport.origin.x),
+                                f32::from(viewport.origin.y),
+                                viewport.scale,
+                                window.scale_factor(),
+                                f32::from(content.width),
+                                f32::from(content.height),
+                            );
+                        }
+                        if let Some(mut dimensions) = dimensions {
+                            dimensions.paint(window, cx);
+                        }
+                        let view_changed = viewport_cell.record_paint(viewport);
+                        if editing && view_changed {
+                            window.invalidate_character_coordinates();
+                        }
+                        if viewport_cell.zoom_label() != painted_zoom_label {
+                            this.update(cx, |_, cx| cx.notify());
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
+    }
 
+    /// The dock, centered over the bottom of the canvas, with any toast
+    /// right-aligned above it.
+    fn bottom_overlay(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .size_full()
+            .absolute()
+            .bottom(px(toolbar::DOCK_MARGIN))
+            .left_0()
+            .right_0()
+            .px_4()
             .flex()
             .flex_col()
-            .bg(rgb(0x1E1E20))
-            .text_color(rgb(0xE6E6E6))
-            .text_sm()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, event, window, cx| this.on_key_down(event, window, cx)))
-            .on_key_up(cx.listener(Self::on_key_up))
-            .on_modifiers_changed(
-                cx.listener(|this, event, window, cx| this.on_modifiers_changed(event, window, cx)),
+            .gap(px(toolbar::FLOAT_GAP))
+            .children(
+                self.toast_pill(cx)
+                    .map(|toast| div().flex().justify_end().child(toast)),
             )
-            .child(self.toolbar(window, cx))
-            .child(
-                div()
-                    .debug_selector(|| "editor-canvas".into())
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_hidden()
-                    .cursor(self.cursor)
-                    .on_scroll_wheel(cx.listener(Self::on_scroll))
-                    .on_pinch(cx.listener(Self::on_pinch))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event, window, cx| this.on_mouse_down(event, window, cx)),
-                    )
-                    .child(
-                        canvas(
-                            move |bounds, window, cx| {
-                                let viewport = layout_viewport.resolve(bounds, image_size, device_scale);
-                                let dimensions = viewport.and_then(|viewport| {
-                                    crop_dimensions.map(|crop| {
-                                        crop::prepaint_dimensions(crop, viewport, bounds, window, cx)
-                                    })
-                                });
-                                (viewport, dimensions)
-                            },
-                            move |bounds, (viewport, dimensions), window, cx| {
-                                if editing {
-                                    window.handle_input(
-                                        &focus,
-                                        ElementInputHandler::new(bounds, this.clone()),
-                                        cx,
-                                    );
-                                }
-                                drag::track(window, this.clone(), Self::on_mouse_move, Self::on_mouse_up);
-                                if let Some(viewport) = viewport {
-                                    paint_canvas(window, viewport, image_size, preview, overlay);
-                                    // Verification observes the painted transform; input still goes through the OS.
-                                    if *VERIFY_VIEW
-                                        .get_or_init(|| std::env::var_os("SNIP_SNIP_VERIFY").is_some())
-                                    {
-                                        let content = window.viewport_size();
-                                        eprintln!(
-                                            "snipctl-view: {} {} {} {} {} {} {} {}",
-                                            image_size.0,
-                                            image_size.1,
-                                            f32::from(viewport.origin.x),
-                                            f32::from(viewport.origin.y),
-                                            viewport.scale,
-                                            window.scale_factor(),
-                                            f32::from(content.width),
-                                            f32::from(content.height),
-                                        );
-                                    }
-                                    if let Some(mut dimensions) = dimensions {
-                                        dimensions.paint(window, cx);
-                                    }
-                                    let view_changed = viewport_cell.record_paint(viewport);
-                                    if editing && view_changed {
-                                        window.invalidate_character_coordinates();
-                                    }
-                                    if viewport_cell.zoom_label() != painted_zoom_label {
-                                        this.update(cx, |_, cx| cx.notify());
-                                    }
-                                }
-                            },
-                        )
-                        .size_full(),
-                    ),
-            )
-            .child(self.status_line(window))
+            .child(div().flex().justify_center().child(self.dock(window, cx)))
     }
 }
 
@@ -538,12 +570,22 @@ fn paint_canvas(
         height: h,
     });
     window
-        .paint_image(image_bounds, image_bounds, Default::default(), preview, 0, false)
+        .paint_image(
+            image_bounds,
+            image_bounds,
+            Corners::all(px(IMAGE_RADIUS)),
+            preview,
+            0,
+            false,
+        )
         .ok();
     // Keeps the image edge visible when the screenshot is as dark as the editor.
-    window.paint_quad(outline(
+    window.paint_quad(quad(
         image_bounds.dilate(px(1.)),
-        hsla(0., 0., 1., 0.12),
+        Corners::all(px(IMAGE_RADIUS + 1.)),
+        gpui::transparent_black(),
+        px(1.),
+        hsla(0., 0., 1., 0.10),
         Default::default(),
     ));
 
