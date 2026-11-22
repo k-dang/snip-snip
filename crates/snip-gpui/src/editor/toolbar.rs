@@ -1,19 +1,29 @@
-//! A single tool strip; secondary controls float over the canvas instead of wrapping.
+//! The dock: one row of tools floating over the bottom of the canvas. Secondary
+//! controls open in popovers above it instead of wrapping.
 
 use gpui::{
-    Anchor, App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, PathBuilder, Render, Role,
-    Stateful, Window, anchored, canvas, deferred, div, point, prelude::*, px, rgb,
+    Anchor, App, BoxShadow, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, PathBuilder,
+    Render, Role, Stateful, Window, anchored, canvas, deferred, div, hsla, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba,
 };
 
-use super::{Editor, PALETTE, Tool, WIDTHS, to_hsla, view::ViewPreset};
+use super::{
+    Editor, PALETTE, Tool, WIDTHS,
+    theme::{BORDER, EDGE, HOVER, ICON, MUTED, SELECTED, SURFACE, TEXT, accent},
+    to_hsla,
+    view::ViewPreset,
+};
 
-pub(super) const HEIGHT: f32 = 52.;
-pub(super) const STATUS_HEIGHT: f32 = 24.;
-const SURFACE: u32 = 0x292E33;
-const BORDER: u32 = 0x41484E;
-const MUTED: u32 = 0xACB5BC;
-const SELECTED: u32 = 0x46565F;
-pub(super) const HOVER: u32 = 0x3B4249;
+const BUTTON: f32 = 32.;
+const DOCK_PADDING: f32 = 4.;
+/// Buttons, padding, and the 1px border.
+const DOCK_HEIGHT: f32 = BUTTON + 2. * DOCK_PADDING + 2.;
+pub(super) const DOCK_MARGIN: f32 = 18.;
+/// Space between the dock's edge and what floats above it: toasts and popovers.
+pub(super) const FLOAT_GAP: f32 = 10.;
+/// Canvas inset that keeps the fitted image clear of the dock.
+pub(super) const BOTTOM_INSET: f32 = DOCK_MARGIN + DOCK_HEIGHT + 16.;
+const RADIUS: f32 = 10.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Popup {
@@ -28,157 +38,133 @@ impl Popup {
     }
 }
 
+/// How a popover trigger looks: quiet like the tools, or filled like a primary action.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    Neutral,
+    Primary,
+}
+
 impl Editor {
-    pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn dock(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (color, width) = self.displayed_style(window);
-        let menu_bounds = self.menu_bounds.clone();
         div()
-            .on_children_prepainted(move |children, _, _| {
-                // Direct toolbar children: tools, divider, ink, spacer, zoom,
-                // divider, export. Keep trigger bounds for outside dismissal.
-                for (menu, child) in [2, 4, 6].into_iter().enumerate() {
-                    menu_bounds[menu].set(children[child]);
-                }
-            })
-            .id("editor-toolbar")
-            .debug_selector(|| "editor-toolbar".into())
-            .h(px(HEIGHT))
-            .flex_shrink_0()
-            .px_2()
+            .id("editor-dock")
+            .debug_selector(|| "editor-dock".into())
+            // Clicks between controls must not reach the canvas behind the dock.
+            .occlude()
             .flex()
             .items_center()
             .gap(px(2.))
-            .bg(rgb(0x202529))
-            .border_b_1()
-            .border_color(rgb(BORDER))
+            .p(px(DOCK_PADDING))
+            .rounded(px(14.))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgba(0x26262EF2), 0.),
+                linear_color_stop(rgba(0x18181DF2), 1.),
+            ))
+            .border_1()
+            .border_color(rgba(EDGE))
+            .shadow(vec![
+                BoxShadow::new(px(0.), px(10.), hsla(0., 0., 0., 0.35)).blur_radius(px(24.)),
+                BoxShadow::new(px(0.), px(1.), hsla(0., 0., 1., 0.06)).inset(),
+            ])
+            .children(
+                [
+                    ("Select", "V", Tool::Select, Icon::Select),
+                    ("Pencil", "P", Tool::Pencil, Icon::Pencil),
+                    ("Arrow", "A", Tool::Arrow, Icon::Arrow),
+                    ("Rectangle", "R", Tool::Rectangle, Icon::Rectangle),
+                    ("Text", "T", Tool::Text, Icon::Text),
+                    ("Crop", "C", Tool::Crop, Icon::Crop),
+                ]
+                .map(|(label, key, tool, glyph)| {
+                    let selected = self.model.tool() == tool;
+                    control(label, true, cx, move |this, window, cx, _| {
+                        this.set_tool(tool, window, cx);
+                    })
+                    .size(px(BUTTON))
+                    .justify_center()
+                    .rounded(px(RADIUS))
+                    .aria_keyshortcuts(key)
+                    .aria_selected(selected)
+                    .tooltip(move |_, cx| tooltip(format!("{label} · {key}"), cx))
+                    .when(!selected, |b| b.hover(|s| s.bg(rgb(HOVER))))
+                    .when(selected, |b| b.bg(accent()))
+                    .child(icon(glyph, rgb(if selected { 0xFFFFFF } else { ICON })))
+                }),
+            )
+            .child(separator())
             .child(
-                div().flex().gap(px(1.)).flex_shrink_0().children(
-                    [
-                        ("Select", "V", Tool::Select, Icon::Select),
-                        ("Pencil", "P", Tool::Pencil, Icon::Pencil),
-                        ("Arrow", "A", Tool::Arrow, Icon::Arrow),
-                        ("Rectangle", "R", Tool::Rectangle, Icon::Rectangle),
-                        ("Text", "T", Tool::Text, Icon::Text),
-                        ("Crop", "C", Tool::Crop, Icon::Crop),
-                    ]
-                    .map(|(label, key, tool, glyph)| {
-                        control(label, true, cx, move |this, window, cx, _| {
-                            this.set_tool(tool, window, cx);
-                        })
-                        .w(px(32.))
-                        .justify_center()
-                        .hover(|s| s.bg(rgb(HOVER)))
-                        .aria_keyshortcuts(key)
-                        .aria_selected(self.model.tool() == tool)
-                        .tooltip(move |_, cx| tooltip(format!("{label} · {key}"), cx))
-                        .when(self.model.tool() == tool, |b| {
-                            b.bg(rgb(SELECTED)).border_color(rgb(0x657B86))
-                        })
-                        .child(icon(glyph, rgb(0xE5EAED)))
-                    }),
+                self.popup_trigger(
+                    "Ink and stroke",
+                    Popup::Ink,
+                    50.,
+                    Trigger::Neutral,
+                    true,
+                    window,
+                    cx,
+                )
+                .gap(px(6.))
+                .child(
+                    div()
+                        .size(px(14.))
+                        .rounded_full()
+                        .bg(to_hsla(color))
+                        .border_2()
+                        .border_color(rgba(0xFFFFFF30)),
+                )
+                .child(
+                    div()
+                        .w(px(14.))
+                        .h(px(width.unwrap_or(self.model.ink_width())))
+                        .rounded_full()
+                        .bg(rgb(TEXT)),
                 ),
             )
             .child(separator())
             .child(
-                self.popup_trigger("Ink and stroke", Popup::Ink, 64., cx)
-                    .child(
-                        div()
-                            .size(px(14.))
-                            .rounded_full()
-                            .bg(to_hsla(color))
-                            .border_1()
-                            .border_color(rgb(0x7B858C)),
-                    )
-                    .child(
-                        div()
-                            .w(px(14.))
-                            .h(px(width.unwrap_or(self.model.ink_width())))
-                            .rounded_full()
-                            .bg(rgb(0xE5EAED)),
-                    )
-                    .child(icon(Icon::Chevron, rgb(MUTED)))
-                    .when(self.popup == Some(Popup::Ink), |b| {
-                        b.child(self.popover(Popup::Ink, window, cx))
-                    }),
-            )
-            .child(div().flex_1().min_w_0())
-            .child(
-                self.popup_trigger("Zoom", Popup::Zoom, 60., cx)
+                self.popup_trigger("Zoom", Popup::Zoom, 52., Trigger::Neutral, true, window, cx)
+                    .text_color(rgb(TEXT))
                     .child(
                         div()
                             .debug_selector(|| "zoom-level".into())
                             .text_xs()
                             .child(self.viewport.zoom_label()),
-                    )
-                    .child(icon(Icon::Chevron, rgb(MUTED)))
-                    .when(self.popup == Some(Popup::Zoom), |b| {
-                        b.child(self.popover(Popup::Zoom, window, cx))
-                    }),
+                    ),
             )
-            .child(separator())
             .child(
-                self.popup_trigger("Export", Popup::Export, 86., cx)
-                    .bg(rgb(0xB4D6DA))
-                    .hover(|s| s.bg(rgb(0xC4E4E7)))
-                    .text_color(rgb(0x172A30))
-                    .child(icon(Icon::Copy, rgb(0x172A30)))
-                    .child("Export")
-                    .child(icon(Icon::Chevron, rgb(0x172A30)))
-                    .when(self.popup == Some(Popup::Export), |b| {
-                        b.child(self.popover(Popup::Export, window, cx))
-                    }),
+                self.popup_trigger(
+                    "Export",
+                    Popup::Export,
+                    88.,
+                    Trigger::Primary,
+                    !self.uploading,
+                    window,
+                    cx,
+                )
+                .ml(px(2.))
+                .gap(px(6.))
+                .when(!self.uploading, |b| {
+                    b.child(icon(Icon::Copy, rgb(0xFFFFFF))).child("Export")
+                })
+                .when(self.uploading, |b| b.child("Uploading…")),
             )
     }
 
-    pub(super) fn status_line(&self, window: &Window) -> impl IntoElement {
-        let (color, width) = self.displayed_style(window);
-        let name = PALETTE
-            .iter()
-            .find(|(_, c)| *c == color)
-            .map_or("Ink", |(name, _)| *name);
-        let width_name = WIDTHS
-            .iter()
-            .find(|(_, w)| width.is_some_and(|v| (v - *w).abs() < 0.001))
-            .map(|(n, _)| *n);
-        let style = match self.model.tool() {
-            Tool::Crop => "Crop".to_owned(),
-            _ => format!(
-                "{name}{}",
-                width_name.map_or(String::new(), |n| format!(" · {n}"))
-            ),
-        };
-        div()
-            .h(px(STATUS_HEIGHT))
-            .flex_shrink_0()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_3()
-            .text_color(rgb(MUTED))
-            .text_size(px(11.))
-            .child(style)
-            .child(
-                div()
-                    .debug_selector({
-                        let status = self.status.clone();
-                        move || status.to_string()
-                    })
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_right()
-                    .child(self.status.clone()),
-            )
-    }
-
+    #[allow(clippy::too_many_arguments)]
     fn popup_trigger(
         &self,
         label: &'static str,
         popup: Popup,
         width: f32,
+        style: Trigger,
+        enabled: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        control(label, true, cx, move |this, window, cx, keyboard| {
+        let open = self.popup == Some(popup);
+        control(label, enabled, cx, move |this, window, cx, keyboard| {
             if this.popup == Some(popup) {
                 this.dismiss_popup(window, cx);
                 return;
@@ -196,21 +182,44 @@ impl Editor {
             }
             cx.notify();
         })
-        .track_focus(&self.menu_focus[popup.index()])
+        .when(enabled, |b| {
+            b.track_focus(&self.menu_focus[popup.index()]).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.cancel_gesture(window);
+                    cx.notify();
+                }),
+            )
+        })
         .relative()
         .w(px(width))
+        .h(px(BUTTON))
+        .rounded(px(RADIUS))
         .justify_center()
-        .when(popup != Popup::Export, |b| b.hover(|s| s.bg(rgb(HOVER))))
-        .aria_expanded(self.popup == Some(popup))
+        .child({
+            // Records the trigger's bounds, border included, so a click on it
+            // doesn't count as outside its popover.
+            let bounds = self.menu_bounds[popup.index()].clone();
+            canvas(move |b, _, _| bounds.set(b), |_, (), _, _| {})
+                .absolute()
+                .top(px(-1.))
+                .bottom(px(-1.))
+                .left(px(-1.))
+                .right(px(-1.))
+        })
+        .aria_expanded(open)
         .tooltip(move |_, cx| tooltip(label.to_owned(), cx))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, cx| {
-                this.cancel_gesture(window);
-                cx.notify();
-            }),
-        )
-        .when(self.popup == Some(popup), |b| b.bg(rgb(SELECTED)))
+        .map(|b| match style {
+            Trigger::Neutral => b
+                .when(enabled, |b| b.hover(|s| s.bg(rgb(HOVER))))
+                .when(open, |b| b.bg(rgb(SELECTED))),
+            Trigger::Primary => b
+                .bg(accent())
+                .when(enabled, |b| b.hover(|s| s.opacity(0.92)))
+                .text_color(rgb(0xFFFFFF))
+                .font_weight(FontWeight::SEMIBOLD),
+        })
+        .when(open, |b| b.child(self.popover(popup, window, cx)))
     }
 
     pub(super) fn dismiss_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -225,9 +234,11 @@ impl Editor {
             Popup::Zoom => self.zoom_popover(cx).into_any_element(),
             Popup::Export => self.export_popover(cx).into_any_element(),
         };
+        // Popovers open upward from the dock, aligned to their trigger's outer
+        // edge. The trigger sits inside the dock's padding and border.
         div()
             .absolute()
-            .top(px(48.))
+            .top(px(-(FLOAT_GAP + DOCK_PADDING + 1.)))
             .w_0()
             .h_0()
             .when(popup == Popup::Ink, |d| d.left_0())
@@ -236,9 +247,9 @@ impl Editor {
                 deferred(
                     anchored()
                         .anchor(if popup == Popup::Ink {
-                            Anchor::TopLeft
+                            Anchor::BottomLeft
                         } else {
-                            Anchor::TopRight
+                            Anchor::BottomRight
                         })
                         .snap_to_window_with_margin(px(8.))
                         .child(
@@ -250,7 +261,7 @@ impl Editor {
                                 .p_3()
                                 .rounded_lg()
                                 .bg(rgb(SURFACE))
-                                .text_color(rgb(0xE5EAED))
+                                .text_color(rgb(TEXT))
                                 .text_xs()
                                 .border_1()
                                 .border_color(rgb(BORDER))
@@ -293,7 +304,7 @@ impl Editor {
                 .bg(to_hsla(color))
                 .hover(move |s| s.bg(to_hsla(color)).opacity(0.85))
                 .aria_selected(active == color)
-                .border_color(rgb(if active == color { 0xE5EAED } else { 0x69747C }))
+                .border_color(rgb(if active == color { TEXT } else { 0x69747C }))
                 .tooltip(move |_, cx| tooltip(label.to_owned(), cx))
                 .when(active == color, |b| {
                     b.child(icon(
@@ -352,12 +363,10 @@ impl Editor {
                     })
                 }),
             )
-            .child(
-                div()
-                    .mt_2()
-                    .text_color(rgb(MUTED))
-                    .child("Export resolution stays the same."),
-            )
+            .child(div().mt_2().text_color(rgb(MUTED)).child({
+                let (w, h) = self.model.document().export_size();
+                format!("Exports at {w} × {h} px.")
+            }))
     }
 
     fn export_popover(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -426,7 +435,7 @@ pub(super) fn control(
         .rounded_md()
         .border_1()
         .border_color(gpui::transparent_black())
-        .focus_visible(|s| s.border_color(rgb(0x8CD4DD)))
+        .focus_visible(|s| s.border_color(rgb(0xB3A4FF)))
         .when(!enabled, |b| b.opacity(0.4))
         .when(enabled, |b| b.cursor_pointer())
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -471,7 +480,7 @@ fn heading(label: &'static str) -> impl IntoElement {
 }
 
 fn separator() -> impl IntoElement {
-    div().mx_1().w(px(1.)).h(px(22.)).flex_shrink_0().bg(rgb(BORDER))
+    div().mx_1().w(px(1.)).h(px(18.)).flex_shrink_0().bg(rgb(BORDER))
 }
 
 fn shortcut(key: &str) -> String {
@@ -487,7 +496,7 @@ impl Render for Tooltip {
             .py_1()
             .rounded_md()
             .bg(rgb(SURFACE))
-            .text_color(rgb(0xE5EAED))
+            .text_color(rgb(TEXT))
             .text_xs()
             .border_1()
             .border_color(rgb(BORDER))
@@ -509,7 +518,6 @@ enum Icon {
     Text,
     Crop,
     Copy,
-    Chevron,
     Check,
 }
 
@@ -544,7 +552,6 @@ fn icon(glyph: Icon, color: impl Into<gpui::Hsla>) -> impl IntoElement {
             &[(7., 7.), (18., 7.), (18., 19.), (7., 19.), (7., 7.)],
             &[(14., 7.), (14., 3.), (3., 3.), (3., 15.), (7., 15.)],
         ],
-        Icon::Chevron => &[&[(5., 9.), (11., 15.), (17., 9.)]],
         Icon::Check => &[&[(4., 11.), (9., 16.), (18., 5.)]],
     };
     canvas(
@@ -567,5 +574,5 @@ fn icon(glyph: Icon, color: impl Into<gpui::Hsla>) -> impl IntoElement {
             }
         },
     )
-    .size(px(if matches!(glyph, Icon::Chevron) { 10. } else { 18. }))
+    .size(px(18.))
 }

@@ -112,7 +112,7 @@ pub(super) fn install(cx: &mut TestAppContext) {
     }
 }
 
-fn assert_status(cx: &mut VisualTestContext, status: String) {
+fn assert_toast(cx: &mut VisualTestContext, status: String) {
     // GPUI's rendered-selector lookup requires a static string.
     assert!(cx.debug_bounds(Box::leak(status.into_boxed_str())).is_some());
 }
@@ -219,7 +219,7 @@ fn save_falls_back_to_home_and_reports_unavailable_locations_and_time(cx: &mut T
     cx.run_until_parked();
     assert!(directory.is_dir());
     assert!(
-        cx.debug_bounds("320 × 200 px").is_some(),
+        cx.debug_bounds("editor-toast").is_none(),
         "cancel is not an error"
     );
 
@@ -282,7 +282,7 @@ fn save_reports_folder_picker_and_write_failures_then_retries_the_document(cx: &
     assert!(!cx.cx.did_prompt_for_new_path());
     let folder = blocked.join("snip-snip");
     let error = std::fs::create_dir_all(&folder).unwrap_err();
-    assert_status(
+    assert_toast(
         &mut cx,
         format!("Save failed: preparing {}: {error}", folder.display()),
     );
@@ -301,7 +301,7 @@ fn save_reports_folder_picker_and_write_failures_then_retries_the_document(cx: &
     cx.simulate_new_path_selection(|_| Some(bad_path.clone()));
     cx.run_until_parked();
     let error = std::fs::write(&bad_path, b"invalid").unwrap_err();
-    assert_status(
+    assert_toast(
         &mut cx,
         format!("Save failed: writing {}: {error}", bad_path.display()),
     );
@@ -311,7 +311,10 @@ fn save_reports_folder_picker_and_write_failures_then_retries_the_document(cx: &
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     cx.run_until_parked();
     assert_image(image::open(&path).unwrap().into_rgba8(), &expected);
-    assert_status(&mut cx, format!("Saved {}", path.display()));
+    assert_toast(
+        &mut cx,
+        format!("Saved {}", path.file_name().unwrap().to_string_lossy()),
+    );
     // Export finalized the text once, even though the first OS effect failed.
     command(&mut cx, "z");
     assert_image(
@@ -338,6 +341,10 @@ fn copy_and_close_keeps_the_editor_on_failure_and_closes_only_after_success(cx: 
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(cx.debug_bounds("Copy failed: clipboard unavailable").is_some());
     assert!(effects.clipboard.borrow().is_none());
+    // Errors stay until replaced; successes fade on their own.
+    cx.executor().advance_clock(std::time::Duration::from_secs(5));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("Copy failed: clipboard unavailable").is_some());
     toolbar(&mut cx, "Copy");
     cx.run_until_parked();
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
@@ -348,6 +355,9 @@ fn copy_and_close_keeps_the_editor_on_failure_and_closes_only_after_success(cx: 
     assert_eq!(cx.cx.read(|app| app.windows().len()), 1);
     assert!(cx.debug_bounds("Copied to clipboard").is_some());
     assert_image(effects.clipboard.borrow().clone().unwrap(), &expected);
+    cx.executor().advance_clock(std::time::Duration::from_secs(5));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("Copied to clipboard").is_none());
     effects.clipboard.replace(None);
     toolbar(&mut cx, "Copy & Close");
     cx.run_until_parked();

@@ -1,4 +1,5 @@
-//! Colors and controls shared by the Settings and Library windows.
+//! Colors and controls shared by the Settings and Library windows. The editor
+//! keeps its own palette but uses `line` for text tests can find.
 
 use gpui::{Div, ElementId, SharedString, Stateful, div, prelude::*, rgb};
 
@@ -15,8 +16,8 @@ pub fn line(text: impl Into<SharedString>) -> Div {
     let text = text.into();
     div()
         .debug_selector({
-            let text = text.to_string();
-            move || text
+            let text = text.clone();
+            move || text.to_string()
         })
         .child(text)
 }

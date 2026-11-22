@@ -84,7 +84,7 @@ fn toolbar(cx: &mut VisualTestContext, label: &'static str) {
     {
         // Finish choosing options before drawing; the popover intentionally
         // receives pointer input over the part of the canvas it covers.
-        let outside = cx.debug_bounds("editor-toolbar").unwrap().origin + point(px(1.), px(1.));
+        let outside = cx.debug_bounds("editor-dock").unwrap().origin + point(px(1.), px(1.));
         cx.simulate_click(outside, Modifiers::none());
     }
 }
@@ -286,8 +286,8 @@ fn toolbar_stays_in_one_row_and_popovers_fit_at_minimum_window_size(cx: &mut Tes
         cx.simulate_scale_factor_change(scale);
         cx.simulate_resize(size(px(480.0), px(320.0)));
         cx.run_until_parked();
-        let bar = cx.debug_bounds("editor-toolbar").unwrap();
-        assert_eq!(bar.size.height, px(52.));
+        let bar = cx.debug_bounds("editor-dock").unwrap();
+        assert_eq!(bar.size.height, px(42.));
         let canvas = cx.debug_bounds("editor-canvas").unwrap();
         assert!(canvas.size.height > px(200.));
         let row_y = cx.debug_bounds("Select").unwrap().center().y;
@@ -336,7 +336,7 @@ fn toolbar_stays_in_one_row_and_popovers_fit_at_minimum_window_size(cx: &mut Tes
             let popup = cx.debug_bounds("toolbar-popover").unwrap();
             assert!(popup.left() >= px(0.) && popup.right() <= px(480.));
             assert!(
-                popup.top() >= bar.bottom() && popup.bottom() <= px(320.),
+                popup.top() >= px(0.) && popup.bottom() <= bar.top(),
                 "{trigger}: popup {popup:?}, bar {bar:?}"
             );
             for &label in items {

@@ -13,7 +13,7 @@ set the view. Navigation preserves edits, history, and original export resolutio
 ## How to get to it (user POV)
 
 Ctrl+wheel (Windows) or Cmd+wheel (macOS), touchpad pinch, Space+drag,
-Fit/100% toolbar controls, or `mod+0`/`mod+1`.
+Fit/100% in the dock's Zoom popover, or `mod+0`/`mod+1`.
 
 ## Driving it with snipctl
 
@@ -21,7 +21,7 @@ Preconditions: fixture snip with an annotation; canvas points from `layout`.
 
 - **Zoom/presets.** `scroll-screen X Y -10 mod` zooms around the pointer;
   `scroll-screen X Y 3` leaves placement unchanged. Check Fit/100% via shortcuts
-  and, when toolbar controls changed, their visible buttons.
+  and, when dock controls changed, their visible buttons.
 - **Pan.** `drag-screen X1 Y1 X2 Y2 space` moves the view; check both bounds.
 - **Resize.** On Windows, `resize-editor 480 320` changes the client area.
   Manual zoom retains magnification; Fit responds to the new size.

@@ -14,7 +14,7 @@ resolution. Failures keep the document available for retry.
 
 ## How to get to it (user POV)
 
-`mod+c` (Copy & Close), `mod+s`, or Copy / Copy & Close / Save toolbar controls.
+`mod+c` (Copy & Close), `mod+s`, or Copy / Copy & Close / Save in the dock's Export popover.
 
 ## Driving it with snipctl
 
@@ -36,10 +36,10 @@ Preconditions: healthy owned session, fixture snip with an annotation or crop.
 ## Gotchas
 
 - `save` refuses existing evidence names and waits for a decodable image.
-- Status text may truncate paths; inspect the file or clipboard itself.
+- Toasts name only the file and fade after 2 seconds; inspect the file or clipboard itself.
 - `key esc` focuses the editor. Use `cancel-save` to dismiss its modal picker.
 - A globally reserved shortcut may not reach the editor. Use `probe-shortcut`
-  on Windows to diagnose it, then check the visible toolbar control. Report
+  on Windows to diagnose it, then check the visible dock control. Report
   shortcut delivery separately when it is in scope.
 
 For clipboard format/lifetime changes, add a native application-paste check on

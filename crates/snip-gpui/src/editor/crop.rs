@@ -71,7 +71,7 @@ impl Editor {
         })
         .w_full()
         .px_2()
-        .when(enabled, |b| b.hover(|s| s.bg(rgb(super::toolbar::HOVER))))
+        .when(enabled, |b| b.hover(|s| s.bg(rgb(super::theme::HOVER))))
         .child("Clear crop")
     }
 }

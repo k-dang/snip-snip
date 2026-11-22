@@ -246,6 +246,12 @@ pub struct Document {
 }
 
 impl Document {
+    /// Width and height of the exported image: the crop when there is one.
+    pub fn export_size(&self) -> (u32, u32) {
+        self.crop
+            .map_or_else(|| self.image.dimensions(), |crop| (crop.width, crop.height))
+    }
+
     /// `image` is a screenshot and is assumed to be fully opaque.
     pub fn new(image: RgbaImage) -> Self {
         Self {
