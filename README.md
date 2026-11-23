@@ -18,7 +18,7 @@ cargo run --release -p snip-gpui
 
 On macOS without full Xcode, add `--features gpui_platform/runtime_shaders`. macOS asks for Screen Recording permission on the first snip.
 
-The app lives in the tray / menu bar. Press `Alt+Shift+S` (changeable in **Settings**) or choose **New snip**, drag over a region, and it opens in the editor.
+The app lives in the tray / menu bar. Press `Alt+Shift+S` (changeable in **Settings**) or choose **New snip**, drag over a region, and it opens in the editor. Tools sit in a dock at the bottom of the editor; its **Ink**, **Zoom**, and **Export** popovers hold colors and stroke widths, Fit/100%, and Copy, Copy & Close, Copy to cloud, and Save.
 
 ## Shortcuts
 
@@ -41,7 +41,7 @@ Optionally, copy a snip on one machine and paste it on another. In **Settings**,
 
 While signed in:
 
-- **Copy to cloud** in the editor's Export menu copies the snip and uploads it.
+- **Copy to cloud** in the editor's Export popover copies the snip and uploads it.
 - **Copy latest cloud snip** in the tray / menu bar puts the newest cloud snip on the clipboard.
 - **Cloud library** in the tray / menu bar shows recent cloud snips. Click one to copy it, or delete it.
 
